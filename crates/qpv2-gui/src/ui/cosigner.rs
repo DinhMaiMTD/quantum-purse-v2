@@ -630,8 +630,14 @@ impl App {
             );
             return;
         }
-        let auth = match self.resolve_auth_key("co-sign a multisig transaction") {
-            Ok(a) => a,
+        let retry = {
+            let request = request.clone();
+            move |app: &mut App| app.cosign_sign_request(request)
+        };
+        let auth = match self.resolve_auth_key("co-sign a multisig transaction", retry) {
+            Ok(Some(a)) => a,
+            // FIDO2 is waiting on the key; the retry re-enters with the result.
+            Ok(None) => return,
             Err(e) => {
                 self.status = Status::Error(format!("Auth failed: {}", e));
                 return;

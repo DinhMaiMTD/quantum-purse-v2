@@ -215,6 +215,11 @@ pub(crate) struct App {
     // How the seed-export thread tells the main UI thread it is done. Some while
     // that thread owns the pinentry dialog; the overlay locks the wallet meanwhile.
     pub(crate) seed_export_dialog_done_rx: Option<mpsc::Receiver<Result<(), String>>>,
+    // A FIDO2 operation running off the UI thread, so the window stays
+    // responsive while the key waits for a touch. See `App::run_fido2`.
+    pub(crate) fido2_pending: Option<wallet::Fido2Pending>,
+    // A finished FIDO2 auth, handed to the caller `resolve_auth_key` re-enters.
+    pub(crate) fido2_auth_result: Option<Result<qpv2_core::types::AuthKey, String>>,
     // ── Trezor link status (device-backed wallets only) ──
     // What the last probe saw. Never a live connection: the host opens a THP
     // session per operation, so this is polled presence, not a held link.
@@ -522,6 +527,8 @@ impl App {
             auth_method,
             trezor_import_rx: None,
             seed_export_dialog_done_rx: None,
+            fido2_pending: None,
+            fido2_auth_result: None,
             device_status: trezor_connect::DeviceStatus::Working,
             device_status_rx: None,
             device_status_probed_at: None,
@@ -559,7 +566,8 @@ impl App {
             }
         }
         if let Some(t) = self.status_set_at {
-            if t.elapsed() >= STATUS_DURATION {
+            // The FIDO2 prompt stays up for as long as the key is waiting.
+            if t.elapsed() >= STATUS_DURATION && self.fido2_pending.is_none() {
                 self.status = Status::None;
                 self.status_seen = Status::None;
                 self.status_set_at = None;
@@ -590,6 +598,7 @@ impl eframe::App for App {
         // Not gated on the screen: this one starts on Setup and is what
         // moves us off it.
         self.poll_trezor_import();
+        self.poll_fido2();
 
         // Device link: probed on its own cadence, polled everywhere. Both are
         // no-ops unless the open wallet is device-backed.
@@ -688,7 +697,10 @@ impl eframe::App for App {
 
         if async_pending {
             ctx.request_repaint();
-        } else if self.trezor_import_rx.is_some() || self.seed_export_dialog_done_rx.is_some() {
+        } else if self.trezor_import_rx.is_some()
+            || self.seed_export_dialog_done_rx.is_some()
+            || self.fido2_pending.is_some()
+        {
             // A frame is what checks the channel, so the repaint rate is the
             // poll rate. These waits are human-paced — someone typing a PIN on
             // the device, or reading a seed phrase in the secure dialog — so

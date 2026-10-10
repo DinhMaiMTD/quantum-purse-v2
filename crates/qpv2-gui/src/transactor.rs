@@ -547,8 +547,20 @@ impl App {
         // must return to Idle: cancelling the pinentry dialog is an
         // ordinary outcome and would otherwise leave the UI reporting
         // that it is still waiting for a signature.
-        let auth = match self.resolve_auth_key("sign and send the TX") {
-            Ok(a) => a,
+        let retry = {
+            let (unsigned_tx, input_cells, lock_args) =
+                (unsigned_tx.clone(), input_cells.clone(), lock_args.clone());
+            move |app: &mut App| {
+                // Never sign a transaction that was abandoned (e.g. by locking) meanwhile.
+                if matches!(app.tx_status, TransactionStatus::AwaitingSignature) {
+                    app.sign_and_send(kind, unsigned_tx, input_cells, lock_args)
+                }
+            }
+        };
+        let auth = match self.resolve_auth_key("sign and send the TX", retry) {
+            Ok(Some(a)) => a,
+            // FIDO2 is waiting on the key; the retry re-enters with the result.
+            Ok(None) => return,
             Err(e) => {
                 tracing::error!("{}", e);
                 self.tx_status = TransactionStatus::Idle;

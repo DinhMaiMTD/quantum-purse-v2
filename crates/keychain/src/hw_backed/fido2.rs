@@ -165,6 +165,19 @@ fn rand_challenge() -> Result<[u8; 32], String> {
 
 fn map_err(e: impl std::fmt::Display) -> String {
     let msg = e.to_string();
+    // Not confirmed in time: YubiKey answers 0x27, spec-following keys 0x2F.
+    // A key that waits longer than the library's ~50s keepalive loop (Trezor,
+    // 60s) outlasts it, and the library reports the UP_NEEDED keepalive byte
+    // as 0x02. The code stays in the message for the logs.
+    if let Some(code) = ["0x27", "0x2F", "0x02"]
+        .into_iter()
+        .find(|code| msg.contains(&format!("err = {}", code)))
+    {
+        return format!(
+            "Not confirmed on the security key in time. Try again, and touch or confirm on the key when it asks (CTAP {}).",
+            code
+        );
+    }
     if msg.contains("Cancelled") || msg.contains("cancel") {
         "Cancelled.".to_string()
     } else if msg.contains("PIN") && msg.contains("invalid") {
@@ -205,6 +218,22 @@ mod tests {
         // Trezor: uv but no clientPin.
         let o = opts(&[("rk", true), ("up", true), ("uv", true)]);
         assert_eq!(pin_mode_from_options(&o), Ok(PinMode::OnDevice));
+    }
+
+    #[test]
+    fn not_confirmed_in_time_is_explained() {
+        for raw in [
+            "response_status err = 0x27 CTAP2_ERR_OPERATION_DENIED  Not authorized.",
+            "response_status err = 0x2F CTAP2_ERR_USER_ACTION_TIMEOUT   Timeout.",
+            "response_status err = 0x02 CTAP1_ERR_INVALID_PARAMETER The command included an invalid parameter.",
+        ] {
+            let msg = map_err(raw);
+            assert!(msg.starts_with("Not confirmed on the security key in time."), "{}", msg);
+        }
+        // Other CTAP errors keep their raw text.
+        assert!(
+            map_err("response_status err = 0x2B CTAP2_ERR_UNSUPPORTED_OPTION").contains("0x2B")
+        );
     }
 
     #[test]

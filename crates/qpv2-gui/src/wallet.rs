@@ -558,11 +558,60 @@ impl App {
         );
     }
 
+    /// Run a FIDO2 operation off the UI thread, then hand its result to
+    /// `then` on the UI thread. The key can wait up to a minute for a
+    /// touch, so running it inline would freeze the window with no prompt.
+    pub(crate) fn run_fido2<T: Send + 'static>(
+        &mut self,
+        job: impl FnOnce() -> Result<T, String> + Send + 'static,
+        then: impl FnOnce(&mut App, Result<T, String>) + 'static,
+    ) -> Result<(), String> {
+        if self.fido2_pending.is_some() {
+            return Err("A security key operation is already in progress.".to_string());
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(job());
+        });
+        let mut then = Some(then);
+        self.fido2_pending = Some(Box::new(move |app: &mut App| {
+            let result = match rx.try_recv() {
+                Ok(r) => r,
+                Err(std::sync::mpsc::TryRecvError::Empty) => return false,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    Err("Security key operation stopped unexpectedly.".to_string())
+                }
+            };
+            if app.status == Status::Info(FIDO2_WAITING.to_string()) {
+                app.status = Status::None;
+            }
+            if let Some(then) = then.take() {
+                then(app, result);
+            }
+            true
+        }));
+        self.status = Status::Info(FIDO2_WAITING.to_string());
+        Ok(())
+    }
+
+    pub(crate) fn poll_fido2(&mut self) {
+        if let Some(mut pending) = self.fido2_pending.take() {
+            if !pending(self) {
+                self.fido2_pending = Some(pending);
+            }
+        }
+    }
+
     /// Resolve the authentication key based on the current auth method.
-    /// Synchronous: may block the egui update loop for pinentry dialogs
-    /// (password/FIDO2 paths).
-    pub(crate) fn resolve_auth_key(&self, purpose: &str) -> Result<AuthKey, String> {
-        match &self.auth_method {
+    /// Password/keychain prompts block the egui update loop. FIDO2 runs in
+    /// the background instead: it returns `Ok(None)`, and once the key
+    /// answers, `retry` re-enters the caller, which then gets the result.
+    pub(crate) fn resolve_auth_key(
+        &mut self,
+        purpose: &str,
+        retry: impl FnOnce(&mut App) + 'static,
+    ) -> Result<Option<AuthKey>, String> {
+        let auth = match &self.auth_method {
             Some(AuthMethod::Password) => qpv2_core::pinentry::prompt_password(
                 &format!("Enter your wallet password to {}.", purpose),
                 "Password:",
@@ -572,22 +621,39 @@ impl App {
                 keychain::retrieve_key(self.wallet_id, purpose).map(AuthKey::CryptoKey)
             }
             Some(AuthMethod::Fido2 { credential_id }) => {
+                if let Some(result) = self.fido2_auth_result.take() {
+                    return result.map(Some);
+                }
                 let cred_bytes = hex::decode(credential_id)
                     .map_err(|e| format!("Invalid credential ID: {}", e))?;
-                let pin = prompt_fido2_pin(&format!(
-                    "Enter your FIDO2 security key PIN to {}.",
-                    purpose
-                ))?;
-                let hmac_output = keychain::fido2::authenticate(&cred_bytes, pin.as_deref())?;
-                qpv2_core::utilities::derive_vault_enc_key(&hmac_output)
-                    .map(AuthKey::CryptoKey)
-                    .map_err(|e| format!("Key derivation failed: {}", e))
+                let description = format!("Enter your FIDO2 security key PIN to {}.", purpose);
+                let wallet_id = self.wallet_id;
+                self.run_fido2(
+                    move || {
+                        let pin = prompt_fido2_pin(&description)?;
+                        let hmac_output =
+                            keychain::fido2::authenticate(&cred_bytes, pin.as_deref())?;
+                        qpv2_core::utilities::derive_vault_enc_key(&hmac_output)
+                            .map(AuthKey::CryptoKey)
+                            .map_err(|e| format!("Key derivation failed: {}", e))
+                    },
+                    move |app, result| {
+                        // Dropped if the user switched wallets meanwhile.
+                        if app.wallet_id == wallet_id {
+                            app.fido2_auth_result = Some(result);
+                            retry(app);
+                            app.fido2_auth_result = None;
+                        }
+                    },
+                )?;
+                return Ok(None);
             }
             Some(AuthMethod::Trezor { .. }) => Err(
                 "This is a Trezor wallet; approve the action on your device instead.".to_string(),
             ),
             None => Err("No authentication method set.".to_string()),
-        }
+        };
+        auth.map(Some)
     }
 
     pub(crate) fn create_singlesig_account(&mut self) {
@@ -596,8 +662,12 @@ impl App {
             return;
         }
 
-        let auth = match self.resolve_auth_key("create a new account") {
-            Ok(a) => a,
+        let auth = match self
+            .resolve_auth_key("create a new account", |app| app.create_singlesig_account())
+        {
+            Ok(Some(a)) => a,
+            // FIDO2 is waiting on the key; the retry re-enters with the result.
+            Ok(None) => return,
             Err(e) => {
                 tracing::error!("{}", e);
                 self.status = Status::Error(e);
@@ -791,14 +861,17 @@ impl App {
         if self.seed_export_dialog_done_rx.is_some() {
             return;
         }
-        let auth = match self.resolve_auth_key("export the seed phrase") {
-            Ok(a) => a,
-            Err(e) => {
-                tracing::error!("{}", e);
-                self.status = Status::Error(e);
-                return;
-            }
-        };
+        let auth =
+            match self.resolve_auth_key("export the seed phrase", |app| app.export_seed_phrase()) {
+                Ok(Some(a)) => a,
+                // FIDO2 is waiting on the key; the retry re-enters with the result.
+                Ok(None) => return,
+                Err(e) => {
+                    tracing::error!("{}", e);
+                    self.status = Status::Error(e);
+                    return;
+                }
+            };
 
         let variant = match KeyVault::get_spx_variant(self.wallet_id) {
             Ok(v) => v,
@@ -1231,7 +1304,7 @@ impl App {
 
     /// Create a FIDO2-authenticated wallet. Prompts for the device PIN
     /// via pinentry, registers a credential, then derives the encryption
-    /// key via hmac-secret.
+    /// key via hmac-secret, all on the FIDO2 worker thread.
     pub(crate) fn create_wallet_with_fido2(&mut self, variant: SpxVariant) {
         let (wallet_id, wallet_name) = match self.prepare_new_wallet() {
             Ok(v) => v,
@@ -1241,50 +1314,33 @@ impl App {
                 return;
             }
         };
-        let pin = match prompt_fido2_pin(
-            "Enter your FIDO2 security key PIN to register a new credential.",
-        ) {
-            Ok(s) => s,
+        let started = self.run_fido2(fido2_register_job, move |app, result| match result {
+            Ok((credential_id, key)) => app.create_wallet_with_fido2_key(
+                variant,
+                wallet_id,
+                wallet_name,
+                credential_id,
+                key,
+            ),
             Err(e) => {
                 tracing::error!("{}", e);
-                self.status = Status::Error(e);
-                return;
+                app.status = Status::Error(e);
             }
-        };
+        });
+        if let Err(e) = started {
+            tracing::error!("{}", e);
+            self.status = Status::Error(e);
+        }
+    }
 
-        let credential = match keychain::fido2::register(pin.as_deref()) {
-            Ok(c) => c,
-            Err(e) => {
-                let msg = format!("FIDO2 registration failed: {}", e);
-                tracing::error!("{}", msg);
-                self.status = Status::Error(msg);
-                return;
-            }
-        };
-
-        let credential_id = hex::encode(&credential.credential_id);
-
-        let hmac_output =
-            match keychain::fido2::authenticate(&credential.credential_id, pin.as_deref()) {
-                Ok(h) => h,
-                Err(e) => {
-                    let msg = format!("FIDO2 authentication failed: {}", e);
-                    tracing::error!("{}", msg);
-                    self.status = Status::Error(msg);
-                    return;
-                }
-            };
-
-        let key = match qpv2_core::utilities::derive_vault_enc_key(&hmac_output) {
-            Ok(k) => k,
-            Err(e) => {
-                let msg = format!("Key derivation failed: {}", e);
-                tracing::error!("{}", msg);
-                self.status = Status::Error(msg);
-                return;
-            }
-        };
-
+    fn create_wallet_with_fido2_key(
+        &mut self,
+        variant: SpxVariant,
+        wallet_id: u32,
+        wallet_name: String,
+        credential_id: String,
+        key: qpv2_core::SecureVec,
+    ) {
         let key_for_account = key.clone();
         let auth_method = AuthMethod::Fido2 {
             credential_id: credential_id.clone(),
@@ -1329,16 +1385,27 @@ impl App {
             }
         };
 
-        let pin = match prompt_fido2_pin("Enter your FIDO2 security key PIN to unlock.") {
-            Ok(s) => s,
-            Err(e) => {
-                tracing::error!("{}", e);
-                self.status = Status::Error(e);
-                return;
-            }
-        };
+        let wallet_id = self.wallet_id;
+        let started = self.run_fido2(
+            move || {
+                let pin = prompt_fido2_pin("Enter your FIDO2 security key PIN to unlock.")?;
+                keychain::fido2::authenticate(&cred_bytes, pin.as_deref())
+            },
+            move |app, result| {
+                // Never unlock a wallet the user switched to meanwhile.
+                if app.wallet_id == wallet_id {
+                    app.finish_fido2_unlock(result);
+                }
+            },
+        );
+        if let Err(e) = started {
+            tracing::error!("{}", e);
+            self.status = Status::Error(e);
+        }
+    }
 
-        match keychain::fido2::authenticate(&cred_bytes, pin.as_deref()) {
+    fn finish_fido2_unlock(&mut self, result: Result<qpv2_core::SecureVec, String>) {
+        match result {
             Ok(_) => match KeyVault::get_all_accounts(self.wallet_id) {
                 Ok(accounts) => {
                     self.accounts = accounts;
@@ -1388,50 +1455,38 @@ impl App {
             }
         };
 
-        let pin = match prompt_fido2_pin(
-            "Enter your FIDO2 security key PIN to register a new credential.",
-        ) {
-            Ok(s) => s,
+        let started = self.run_fido2(fido2_register_job, move |app, result| match result {
+            Ok((credential_id, key)) => app.import_seed_phrase_with_fido2_key(
+                variant,
+                single_sig_convention,
+                wallet_id,
+                wallet_name,
+                seed_phrase,
+                credential_id,
+                key,
+            ),
             Err(e) => {
                 tracing::error!("{}", e);
-                self.status = Status::Error(e);
-                return;
+                app.status = Status::Error(e);
             }
-        };
+        });
+        if let Err(e) = started {
+            tracing::error!("{}", e);
+            self.status = Status::Error(e);
+        }
+    }
 
-        let credential = match keychain::fido2::register(pin.as_deref()) {
-            Ok(c) => c,
-            Err(e) => {
-                let msg = format!("FIDO2 registration failed: {}", e);
-                tracing::error!("{}", msg);
-                self.status = Status::Error(msg);
-                return;
-            }
-        };
-
-        let credential_id = hex::encode(&credential.credential_id);
-
-        let hmac_output =
-            match keychain::fido2::authenticate(&credential.credential_id, pin.as_deref()) {
-                Ok(h) => h,
-                Err(e) => {
-                    let msg = format!("FIDO2 authentication failed: {}", e);
-                    tracing::error!("{}", msg);
-                    self.status = Status::Error(msg);
-                    return;
-                }
-            };
-
-        let key = match qpv2_core::utilities::derive_vault_enc_key(&hmac_output) {
-            Ok(k) => k,
-            Err(e) => {
-                let msg = format!("Key derivation failed: {}", e);
-                tracing::error!("{}", msg);
-                self.status = Status::Error(msg);
-                return;
-            }
-        };
-
+    #[allow(clippy::too_many_arguments)]
+    fn import_seed_phrase_with_fido2_key(
+        &mut self,
+        variant: SpxVariant,
+        single_sig_convention: SingleSigConvention,
+        wallet_id: u32,
+        wallet_name: String,
+        seed_phrase: SecureString,
+        credential_id: String,
+        key: qpv2_core::SecureVec,
+    ) {
         let key_for_account = key.clone();
         let auth_method = AuthMethod::Fido2 {
             credential_id: credential_id.clone(),
@@ -1467,6 +1522,24 @@ impl App {
             StartingBlock::Detect,
         );
     }
+}
+
+/// Polled each frame by `App::poll_fido2`; returns true once it has run.
+pub(crate) type Fido2Pending = Box<dyn FnMut(&mut App) -> bool>;
+
+const FIDO2_WAITING: &str = "Waiting for your security key: touch it or confirm on its screen.";
+
+/// Register a new credential and derive the vault key from it. Runs on the
+/// FIDO2 worker thread; returns the hex credential ID and the key.
+fn fido2_register_job() -> Result<(String, qpv2_core::SecureVec), String> {
+    let pin = prompt_fido2_pin("Enter your FIDO2 security key PIN to register a new credential.")?;
+    let credential = keychain::fido2::register(pin.as_deref())
+        .map_err(|e| format!("FIDO2 registration failed: {}", e))?;
+    let hmac_output = keychain::fido2::authenticate(&credential.credential_id, pin.as_deref())
+        .map_err(|e| format!("FIDO2 authentication failed: {}", e))?;
+    let key = qpv2_core::utilities::derive_vault_enc_key(&hmac_output)
+        .map_err(|e| format!("Key derivation failed: {}", e))?;
+    Ok((hex::encode(&credential.credential_id), key))
 }
 
 /// Prompt for the FIDO2 PIN via pinentry only when the connected key takes
