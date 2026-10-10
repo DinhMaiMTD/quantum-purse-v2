@@ -1,7 +1,7 @@
 //! Wallet lifecycle: create, unlock, lock, new account, config.
 
 use qpv2_core::types::{AuthKey, AuthMethod, SingleSigConvention, SpxVariant};
-use qpv2_core::KeyVault;
+use qpv2_core::{KeyVault, SecureString};
 
 use crate::tx_history::TxHistoryStore;
 use crate::types::{CurrentWallet, Screen, Status, TransactionStatus, TrezorImportUpdate};
@@ -574,11 +574,11 @@ impl App {
             Some(AuthMethod::Fido2 { credential_id }) => {
                 let cred_bytes = hex::decode(credential_id)
                     .map_err(|e| format!("Invalid credential ID: {}", e))?;
-                let pin = qpv2_core::pinentry::prompt_password(
-                    &format!("Enter your FIDO2 security key PIN to {}.", purpose),
-                    "PIN:",
-                )?;
-                let hmac_output = keychain::fido2::authenticate(&cred_bytes, &pin)?;
+                let pin = prompt_fido2_pin(&format!(
+                    "Enter your FIDO2 security key PIN to {}.",
+                    purpose
+                ))?;
+                let hmac_output = keychain::fido2::authenticate(&cred_bytes, pin.as_deref())?;
                 qpv2_core::utilities::derive_vault_enc_key(&hmac_output)
                     .map(AuthKey::CryptoKey)
                     .map_err(|e| format!("Key derivation failed: {}", e))
@@ -1241,9 +1241,8 @@ impl App {
                 return;
             }
         };
-        let pin = match qpv2_core::pinentry::prompt_password(
+        let pin = match prompt_fido2_pin(
             "Enter your FIDO2 security key PIN to register a new credential.",
-            "PIN:",
         ) {
             Ok(s) => s,
             Err(e) => {
@@ -1253,7 +1252,7 @@ impl App {
             }
         };
 
-        let credential = match keychain::fido2::register(&pin) {
+        let credential = match keychain::fido2::register(pin.as_deref()) {
             Ok(c) => c,
             Err(e) => {
                 let msg = format!("FIDO2 registration failed: {}", e);
@@ -1265,15 +1264,16 @@ impl App {
 
         let credential_id = hex::encode(&credential.credential_id);
 
-        let hmac_output = match keychain::fido2::authenticate(&credential.credential_id, &pin) {
-            Ok(h) => h,
-            Err(e) => {
-                let msg = format!("FIDO2 authentication failed: {}", e);
-                tracing::error!("{}", msg);
-                self.status = Status::Error(msg);
-                return;
-            }
-        };
+        let hmac_output =
+            match keychain::fido2::authenticate(&credential.credential_id, pin.as_deref()) {
+                Ok(h) => h,
+                Err(e) => {
+                    let msg = format!("FIDO2 authentication failed: {}", e);
+                    tracing::error!("{}", msg);
+                    self.status = Status::Error(msg);
+                    return;
+                }
+            };
 
         let key = match qpv2_core::utilities::derive_vault_enc_key(&hmac_output) {
             Ok(k) => k,
@@ -1329,10 +1329,7 @@ impl App {
             }
         };
 
-        let pin = match qpv2_core::pinentry::prompt_password(
-            "Enter your FIDO2 security key PIN to unlock.",
-            "PIN:",
-        ) {
+        let pin = match prompt_fido2_pin("Enter your FIDO2 security key PIN to unlock.") {
             Ok(s) => s,
             Err(e) => {
                 tracing::error!("{}", e);
@@ -1341,7 +1338,7 @@ impl App {
             }
         };
 
-        match keychain::fido2::authenticate(&cred_bytes, &pin) {
+        match keychain::fido2::authenticate(&cred_bytes, pin.as_deref()) {
             Ok(_) => match KeyVault::get_all_accounts(self.wallet_id) {
                 Ok(accounts) => {
                     self.accounts = accounts;
@@ -1391,9 +1388,8 @@ impl App {
             }
         };
 
-        let pin = match qpv2_core::pinentry::prompt_password(
+        let pin = match prompt_fido2_pin(
             "Enter your FIDO2 security key PIN to register a new credential.",
-            "PIN:",
         ) {
             Ok(s) => s,
             Err(e) => {
@@ -1403,7 +1399,7 @@ impl App {
             }
         };
 
-        let credential = match keychain::fido2::register(&pin) {
+        let credential = match keychain::fido2::register(pin.as_deref()) {
             Ok(c) => c,
             Err(e) => {
                 let msg = format!("FIDO2 registration failed: {}", e);
@@ -1415,15 +1411,16 @@ impl App {
 
         let credential_id = hex::encode(&credential.credential_id);
 
-        let hmac_output = match keychain::fido2::authenticate(&credential.credential_id, &pin) {
-            Ok(h) => h,
-            Err(e) => {
-                let msg = format!("FIDO2 authentication failed: {}", e);
-                tracing::error!("{}", msg);
-                self.status = Status::Error(msg);
-                return;
-            }
-        };
+        let hmac_output =
+            match keychain::fido2::authenticate(&credential.credential_id, pin.as_deref()) {
+                Ok(h) => h,
+                Err(e) => {
+                    let msg = format!("FIDO2 authentication failed: {}", e);
+                    tracing::error!("{}", msg);
+                    self.status = Status::Error(msg);
+                    return;
+                }
+            };
 
         let key = match qpv2_core::utilities::derive_vault_enc_key(&hmac_output) {
             Ok(k) => k,
@@ -1469,6 +1466,19 @@ impl App {
             wallet_name,
             StartingBlock::Detect,
         );
+    }
+}
+
+/// Prompt for the FIDO2 PIN via pinentry only when the connected key takes
+/// it from the host. Keys that verify on-device (Trezor) return `None` and
+/// ask for the PIN on their own screen. Also fails fast, before any PIN
+/// dialog, when no key is connected.
+fn prompt_fido2_pin(description: &str) -> Result<Option<SecureString>, String> {
+    match keychain::fido2::pin_mode()? {
+        keychain::fido2::PinMode::Host => {
+            qpv2_core::pinentry::prompt_password(description, "PIN:").map(Some)
+        }
+        keychain::fido2::PinMode::OnDevice => Ok(None),
     }
 }
 

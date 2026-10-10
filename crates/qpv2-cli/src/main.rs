@@ -405,9 +405,8 @@ fn resolve_auth_key(wallet_id: u32, purpose: &str) -> Result<AuthKey, String> {
         AuthMethod::Fido2 { ref credential_id } => {
             let cred_bytes =
                 hex::decode(credential_id).map_err(|e| format!("Invalid credential ID: {}", e))?;
-            let pin =
-                prompt_for_input(&format!("Enter your security key PIN to {}: ", purpose))?;
-            let hmac_output = keychain::fido2::authenticate(&cred_bytes, &pin)?;
+            let pin = prompt_fido2_pin(&format!("Enter your security key PIN to {}: ", purpose))?;
+            let hmac_output = keychain::fido2::authenticate(&cred_bytes, pin.as_deref())?;
             let key = qpv2_core::utilities::derive_vault_enc_key(&hmac_output)?;
             Ok(AuthKey::CryptoKey(key))
         }
@@ -453,14 +452,26 @@ fn import_with_keychain(
     Ok(())
 }
 
+/// Prompt for the security key PIN only when the key takes it from the host;
+/// keys that verify on-device (Trezor) ask for it on their own screen.
+fn prompt_fido2_pin(prompt: &str) -> Result<Option<SecureString>, String> {
+    match keychain::fido2::pin_mode()? {
+        keychain::fido2::PinMode::Host => prompt_for_input(prompt).map(Some),
+        keychain::fido2::PinMode::OnDevice => {
+            println!("Enter the PIN and confirm on your security key.");
+            Ok(None)
+        }
+    }
+}
+
 fn init_with_fido2(vault: &KeyVault, name: &str) -> Result<(), String> {
-    let pin = prompt_for_input("Enter security key PIN: ")?;
+    let pin = prompt_fido2_pin("Enter security key PIN: ")?;
     println!("Registering credential...");
-    let credential = keychain::fido2::register(&pin)?;
+    let credential = keychain::fido2::register(pin.as_deref())?;
     let credential_id = hex::encode(&credential.credential_id);
 
     println!("Deriving encryption key...");
-    let hmac_output = keychain::fido2::authenticate(&credential.credential_id, &pin)?;
+    let hmac_output = keychain::fido2::authenticate(&credential.credential_id, pin.as_deref())?;
     let key = qpv2_core::utilities::derive_vault_enc_key(&hmac_output)?;
 
     let auth_method = AuthMethod::Fido2 { credential_id };
@@ -475,13 +486,13 @@ fn import_with_fido2(
     name: &str,
     single_sig_convention: SingleSigConvention,
 ) -> Result<(), String> {
-    let pin = prompt_for_input("Enter security key PIN: ")?;
+    let pin = prompt_fido2_pin("Enter security key PIN: ")?;
     println!("Registering credential...");
-    let credential = keychain::fido2::register(&pin)?;
+    let credential = keychain::fido2::register(pin.as_deref())?;
     let credential_id = hex::encode(&credential.credential_id);
 
     println!("Deriving encryption key...");
-    let hmac_output = keychain::fido2::authenticate(&credential.credential_id, &pin)?;
+    let hmac_output = keychain::fido2::authenticate(&credential.credential_id, pin.as_deref())?;
     let key = qpv2_core::utilities::derive_vault_enc_key(&hmac_output)?;
 
     let auth_method = AuthMethod::Fido2 { credential_id };
