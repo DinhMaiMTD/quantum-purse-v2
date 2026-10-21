@@ -195,84 +195,75 @@ impl App {
 
         let single_sig_convention = SingleSigConvention::new(self.import_from_v1);
 
-        let kc_label = format!("{} // {}", verb, keychain::short_name());
-        if ui
-            .add_enabled(
-                !device_busy,
-                ghost_button(&self.colors, &kc_label, btn_size),
-            )
-            .clicked()
-        {
-            let v = self.new_wallet_variant;
-            if is_import {
-                self.import_seed_phrase_with_keychain(v, single_sig_convention);
-            } else {
-                self.create_wallet_with_keychain(v);
-            }
-            self.wallet_modal = WalletModal::None;
-            self.import_from_v1 = false;
-        }
-
-        ui.add_space(6.0);
-        let fido_label = format!("{} // Security Key", verb);
-        if ui
-            .add_enabled(
-                !device_busy,
-                ghost_button(&self.colors, &fido_label, btn_size),
-            )
-            .clicked()
-        {
-            let v = self.new_wallet_variant;
-            if is_import {
-                self.import_seed_phrase_with_fido2(v, single_sig_convention);
-            } else {
-                self.create_wallet_with_fido2(v);
-            }
-            self.wallet_modal = WalletModal::None;
-            self.import_from_v1 = false;
-        }
-
-        ui.add_space(6.0);
-        let pw_label = format!("{} // Password", verb);
-        if ui
-            .add_enabled(
-                !device_busy,
-                ghost_button(&self.colors, &pw_label, btn_size),
-            )
-            .clicked()
-        {
-            let v = self.new_wallet_variant;
-            if is_import {
-                self.import_seed_phrase_with_password(v, single_sig_convention);
-            } else {
-                self.create_wallet_with_password(v);
-            }
-            self.wallet_modal = WalletModal::None;
-            self.import_from_v1 = false;
-        }
-
-        // A Trezor holds its own seed, so it has nothing to restore from a
-        // phrase and is offered only when creating. The device checks the
-        // chosen parameter set against its seed and names the ones that fit
-        // if it doesn't. Unlike the buttons above, this one leaves the dialog
-        // open: success closes it by switching to the new wallet, while a
-        // failure leaves it open with the name and parameter set kept for a
-        // retry, and reports the error in the status line.
-        if !is_import {
-            ui.add_space(6.0);
+        ui.add_enabled_ui(!device_busy, |ui| {
+            let kc_label = format!("{} // {}", verb, keychain::short_name());
             if ui
-                .add_enabled(
-                    !device_busy,
-                    ghost_button(&self.colors, "Connect // Trezor", btn_size),
-                )
+                .add(ghost_button(&self.colors, &kc_label, btn_size))
                 .clicked()
             {
-                self.start_create_trezor_watch_only_wallet(self.new_wallet_variant, 1);
+                let v = self.new_wallet_variant;
+                if is_import {
+                    self.import_seed_phrase_with_keychain(v, single_sig_convention);
+                } else {
+                    self.create_wallet_with_keychain(v);
+                }
+                self.wallet_modal = WalletModal::None;
+                self.import_from_v1 = false;
             }
-            if connecting {
-                ui.add_space(8.0);
-                trezor_waiting_line(ui, &self.colors);
+
+            ui.add_space(6.0);
+            let fido_label = format!("{} // Security Key", verb);
+            if ui
+                .add(ghost_button(&self.colors, &fido_label, btn_size))
+                .clicked()
+            {
+                let v = self.new_wallet_variant;
+                if is_import {
+                    self.import_seed_phrase_with_fido2(v, single_sig_convention);
+                } else {
+                    self.create_wallet_with_fido2(v);
+                }
+                self.wallet_modal = WalletModal::None;
+                self.import_from_v1 = false;
             }
+
+            ui.add_space(6.0);
+            let pw_label = format!("{} // Password", verb);
+            if ui
+                .add(ghost_button(&self.colors, &pw_label, btn_size))
+                .clicked()
+            {
+                let v = self.new_wallet_variant;
+                if is_import {
+                    self.import_seed_phrase_with_password(v, single_sig_convention);
+                } else {
+                    self.create_wallet_with_password(v);
+                }
+                self.wallet_modal = WalletModal::None;
+                self.import_from_v1 = false;
+            }
+
+            // A Trezor holds its own seed, so it has nothing to restore from a
+            // phrase and is offered only when creating. The device checks the
+            // chosen parameter set against its seed and names the ones that fit
+            // if it doesn't. Unlike the buttons above, this one leaves the
+            // dialog open: success closes it by switching to the new wallet,
+            // while a failure leaves it open with the name and parameter set
+            // kept for a retry, and reports the error in the status line.
+            if !is_import {
+                ui.add_space(6.0);
+                if ui
+                    .add(ghost_button(&self.colors, "Connect // Trezor", btn_size))
+                    .clicked()
+                {
+                    self.start_create_trezor_watch_only_wallet(self.new_wallet_variant, 1);
+                }
+            }
+        });
+        // Outside the group so it isn't greyed out with the buttons.
+        if connecting {
+            ui.add_space(8.0);
+            trezor_waiting_line(ui, &self.colors);
         }
 
         ui.add_space(14.0);
