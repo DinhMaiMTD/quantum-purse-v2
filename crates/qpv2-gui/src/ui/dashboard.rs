@@ -47,9 +47,6 @@ impl App {
                 self.draw_quick_actions(ui);
                 ui.add_space(16.0);
                 self.draw_transaction_tape(ui);
-
-                ui.add_space(12.0);
-                self.show_status(ui);
                 ui.add_space(20.0);
             });
         });
