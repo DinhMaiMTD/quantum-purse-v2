@@ -587,7 +587,7 @@ impl App {
         }
     }
 
-    /// Pick up the accounts read from a Trezor by `create_trezor_watch_only_wallet`
+    /// Pick up the accounts read from a Trezor by `start_create_trezor_watch_only_wallet`
     /// and turn them into a wallet. Runs on every screen, unlike the balance
     /// pollers: the import can start on the setup screen, where they don't
     /// run, and is what moves us off it. It can also start from the New Vault
@@ -601,7 +601,7 @@ impl App {
         match rx.try_recv() {
             Ok(Ok((model, variant, accounts))) => {
                 self.trezor_connect_rx = None;
-                self.finish_trezor_import(model, variant, accounts);
+                self.finish_create_trezor_watch_only_wallet(model, variant, accounts);
             }
             Ok(Err(e)) => {
                 self.trezor_connect_rx = None;

@@ -299,8 +299,8 @@ impl App {
         tracing::info!("Wallet locked (wallet_id={})", self.wallet_id);
     }
 
-    /// Trim the wallet name and claim the next available wallet ID.
-    /// Name uniqueness is enforced by core during creation/import.
+    /// Trim the wallet name, check it is free, and claim the next wallet ID.
+    /// Called before any prompt, so a duplicate name fails early.
     pub(crate) fn prepare_new_wallet(&self) -> Result<(u32, String), String> {
         let trimmed = self.new_wallet_name.trim();
         let name = if trimmed.is_empty() {
@@ -310,6 +310,7 @@ impl App {
         } else {
             trimmed.to_string()
         };
+        qpv2_core::db::wallets::validate_wallet_name(&name, None).map_err(|e| e.to_string())?;
         let wallet_id = qpv2_core::db::wallets::next_wallet_id().map_err(|e| e.to_string())?;
         Ok((wallet_id, name))
     }
@@ -907,12 +908,18 @@ impl App {
     /// what the device is waiting for. `poll_trezor_import`
     /// picks up the result and creates the wallet. No-op while an import is
     /// already in flight.
-    pub(crate) fn create_trezor_watch_only_wallet(
+    pub(crate) fn start_create_trezor_watch_only_wallet(
         &mut self,
         variant: SpxVariant,
         account_count: u32,
     ) {
         if self.trezor_connect_rx.is_some() {
+            return;
+        }
+        // Check the name now; the wallet is only created after the device steps.
+        if let Err(e) = self.prepare_new_wallet() {
+            tracing::error!("{}", e);
+            self.status = Status::Error(e);
             return;
         }
         let is_mainnet = self.qp_client.is_mainnet();
@@ -1018,7 +1025,7 @@ impl App {
     /// Turn the accounts imported from a Trezor into a wallet. Called by
     /// `poll_trezor_import` on the UI thread; the wallet id is allocated only
     /// now, so a failed or cancelled import leaves no empty wallet behind.
-    pub(crate) fn finish_trezor_import(
+    pub(crate) fn finish_create_trezor_watch_only_wallet(
         &mut self,
         model: String,
         variant: SpxVariant,
@@ -1033,7 +1040,7 @@ impl App {
             }
         };
 
-        if let Err(e) = KeyVault::create_device_wallet(
+        if let Err(e) = KeyVault::create_hw_watch_only_wallet(
             wallet_id,
             &wallet_name,
             variant,

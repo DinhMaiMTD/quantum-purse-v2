@@ -840,7 +840,7 @@ impl App {
         ui.horizontal(|ui| {
             let btn = ghost_button(&self.colors, "Connect Trezor", size);
             if ui.add_enabled(!waiting, btn).clicked() {
-                self.create_trezor_watch_only_wallet(self.selected_variant, 1);
+                self.start_create_trezor_watch_only_wallet(self.selected_variant, 1);
             }
         });
         if waiting {

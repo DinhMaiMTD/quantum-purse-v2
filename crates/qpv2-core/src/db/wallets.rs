@@ -58,10 +58,8 @@ pub fn next_wallet_id() -> Result<u32, KeyVaultDBError> {
 
 /// Check that `name` is non-empty and not already used by another wallet.
 /// Pass `exclude_id` to allow a wallet to keep its own name during rename.
-pub(crate) fn validate_wallet_name(
-    name: &str,
-    exclude_id: Option<u32>,
-) -> Result<(), KeyVaultDBError> {
+/// Public so a caller can check a name before any prompts or device steps.
+pub fn validate_wallet_name(name: &str, exclude_id: Option<u32>) -> Result<(), KeyVaultDBError> {
     if name.is_empty() {
         return Err(KeyVaultDBError::DatabaseError(
             "Wallet name cannot be empty.".to_string(),
@@ -73,7 +71,7 @@ pub(crate) fn validate_wallet_name(
         .any(|w| w.name == name && (exclude_id != Some(w.id)));
     if conflict {
         return Err(KeyVaultDBError::DatabaseError(format!(
-            "Wallet '{}' already exists.",
+            "Wallet name '{}' already exists.",
             name
         )));
     }

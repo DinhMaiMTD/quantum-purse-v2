@@ -862,7 +862,7 @@ impl KeyVault {
     /// callers pass the device crate's `TREZOR_CONVENTION` rather than naming
     /// a variant here, so the wallet record and the accounts can never drift
     /// apart the way they did when this was hard-coded.
-    pub fn create_device_wallet(
+    pub fn create_hw_watch_only_wallet(
         wallet_id: u32,
         name: &str,
         variant: SpxVariant,
