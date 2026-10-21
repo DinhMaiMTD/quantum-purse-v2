@@ -71,6 +71,8 @@ impl App {
         let c_accent = self.colors.accent;
         let c_muted = self.colors.text_muted;
         let c_border = self.colors.border;
+        // A Trezor connect started here locks the inputs and exits until it ends.
+        let connecting = self.trezor_connect_rx.is_some();
 
         // ── Title row + hairline ──
         let (code, subtitle) = if is_import {
@@ -112,7 +114,8 @@ impl App {
             .stroke(egui::Stroke::new(1.0, c_border))
             .inner_margin(egui::Margin::symmetric(8, 6))
             .show(ui, |ui| {
-                ui.add(
+                ui.add_enabled(
+                    !connecting,
                     egui::TextEdit::singleline(&mut self.new_wallet_name)
                         .hint_text("auto-generated if empty")
                         .desired_width(ui.available_width())
@@ -126,36 +129,38 @@ impl App {
         // ── Parameter Set ──
         section_header(ui, &self.colors, &sec.next_code(), "Parameter Set");
         ui.add_space(6.0);
-        let variant_combo = egui::ComboBox::from_id_salt("wallet_modal_variant")
-            .selected_text(
-                egui::RichText::new(format!("SPHINCS+ {}", self.new_wallet_variant))
-                    .size(12.0)
-                    .color(c_accent),
-            )
-            .width(ui.available_width())
-            .show_ui(ui, |ui| {
-                for variant in &[
-                    SpxVariant::Sha2128S,
-                    SpxVariant::Sha2128F,
-                    SpxVariant::Shake128S,
-                    SpxVariant::Shake128F,
-                    SpxVariant::Sha2192S,
-                    SpxVariant::Sha2192F,
-                    SpxVariant::Shake192S,
-                    SpxVariant::Shake192F,
-                    SpxVariant::Sha2256S,
-                    SpxVariant::Sha2256F,
-                    SpxVariant::Shake256S,
-                    SpxVariant::Shake256F,
-                ] {
-                    let selected = self.new_wallet_variant == *variant;
-                    let text = egui::RichText::new(format!("{}", variant))
+        ui.add_enabled_ui(!connecting, |ui| {
+            let variant_combo = egui::ComboBox::from_id_salt("wallet_modal_variant")
+                .selected_text(
+                    egui::RichText::new(format!("SPHINCS+ {}", self.new_wallet_variant))
                         .size(12.0)
-                        .color(if selected { c_accent } else { self.colors.text });
-                    ui.selectable_value(&mut self.new_wallet_variant, *variant, text);
-                }
-            });
-        pin_popup_above_modal(ui, &variant_combo.response);
+                        .color(c_accent),
+                )
+                .width(ui.available_width())
+                .show_ui(ui, |ui| {
+                    for variant in &[
+                        SpxVariant::Sha2128S,
+                        SpxVariant::Sha2128F,
+                        SpxVariant::Shake128S,
+                        SpxVariant::Shake128F,
+                        SpxVariant::Sha2192S,
+                        SpxVariant::Sha2192F,
+                        SpxVariant::Shake192S,
+                        SpxVariant::Shake192F,
+                        SpxVariant::Sha2256S,
+                        SpxVariant::Sha2256F,
+                        SpxVariant::Shake256S,
+                        SpxVariant::Shake256F,
+                    ] {
+                        let selected = self.new_wallet_variant == *variant;
+                        let text = egui::RichText::new(format!("{}", variant))
+                            .size(12.0)
+                            .color(if selected { c_accent } else { self.colors.text });
+                        ui.selectable_value(&mut self.new_wallet_variant, *variant, text);
+                    }
+                });
+            pin_popup_above_modal(ui, &variant_combo.response);
+        });
 
         ui.add_space(14.0);
 
@@ -182,13 +187,6 @@ impl App {
         let verb = if is_import { "Import" } else { "Create" };
         let full_w = ui.available_width();
         let btn_size = egui::vec2(full_w, 34.0);
-        // While a Trezor import started here runs, the dialog stays open to
-        // point the user at the device, and every other way out is disabled.
-        // Finishing or leaving would drop the import mid-conversation with
-        // the device, which then stays claimed and fails the next Trezor
-        // action as "busy with another operation". The user cancels on the
-        // Trezor instead.
-        let connecting = self.trezor_connect_rx.is_some();
         // Any of our Trezor operations also disables the create buttons,
         // including a reconnect or a signing for the open wallet: creating a
         // wallet switches to it and would drop that operation the same way,
