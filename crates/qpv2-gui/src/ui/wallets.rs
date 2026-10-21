@@ -56,7 +56,7 @@ impl App {
 
                     ui.horizontal(|ui| {
                         // Wallet actions share the same ghost-button treatment.
-                        let btns_w = 120.0 + 80.0 + 110.0 + 3.0 * 8.0;
+                        let btns_w = 120.0 + 110.0 + 2.0 * 8.0;
                         let header_w = (ui.available_width() - btns_w).max(0.0);
                         ui.allocate_ui_with_layout(
                             egui::vec2(header_w, 24.0),
@@ -79,20 +79,15 @@ impl App {
                         {
                             self.export_seed_phrase();
                         }
-                        let import = ghost_button(&self.colors, "IMPORT", egui::vec2(80.0, 24.0));
-                        if ui
-                            .add(import)
-                            .on_hover_text("Restore a wallet from a seed phrase")
-                            .clicked()
-                        {
-                            self.wallet_modal = crate::types::WalletModal::Import;
-                            self.new_wallet_name.clear();
-                            self.new_wallet_variant = qpv2_core::types::SpxVariant::Sha2128S;
-                            self.import_from_v1 = false;
-                        }
                         let create =
                             ghost_button(&self.colors, "NEW WALLET", egui::vec2(120.0, 24.0));
-                        if ui.add(create).clicked() {
+                        if ui
+                            .add(create)
+                            .on_hover_text(
+                                "Create a wallet, import a seed phrase, or connect a Trezor",
+                            )
+                            .clicked()
+                        {
                             self.wallet_modal = crate::types::WalletModal::Create;
                             self.new_wallet_name.clear();
                             self.new_wallet_variant = qpv2_core::types::SpxVariant::Sha2128S;

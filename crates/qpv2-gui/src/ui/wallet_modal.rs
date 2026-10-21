@@ -74,24 +74,47 @@ impl App {
         // A Trezor connect started here locks the inputs and exits until it ends.
         let connecting = self.trezor_connect_rx.is_some();
 
-        // ── Title row + hairline ──
-        let (code, subtitle) = if is_import {
-            ("RESTORE VAULT", "// IMPORT SEED")
+        // ── Title row + create / import toggle + hairline ──
+        let subtitle = if is_import {
+            "// IMPORT SEED"
         } else {
-            ("NEW VAULT", "// INITIALIZE")
+            "// INITIALIZE"
         };
-        ui.horizontal(|ui| {
-            ui.label(
-                egui::RichText::new(code)
-                    .font(label_font(11.0))
-                    .color(c_accent),
-            );
-            ui.label(
-                egui::RichText::new(subtitle)
-                    .font(label_font(11.0))
-                    .color(c_muted),
-            );
-        });
+        let toggle_size = egui::vec2(86.0, 26.0);
+        // Start the row at the toggle's height so the title centres on it.
+        ui.allocate_ui_with_layout(
+            egui::vec2(ui.available_width(), toggle_size.y),
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
+                ui.label(
+                    egui::RichText::new("VAULT")
+                        .font(label_font(11.0))
+                        .color(c_accent),
+                );
+                ui.label(
+                    egui::RichText::new(subtitle)
+                        .font(label_font(11.0))
+                        .color(c_muted),
+                );
+                // Right to left, so the modes are listed in reverse.
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    for (label, mode) in [
+                        ("IMPORT", WalletModal::Import),
+                        ("CREATE", WalletModal::Create),
+                    ] {
+                        let mut cell = ghost_button(&self.colors, label, toggle_size);
+                        if self.wallet_modal == mode {
+                            cell = cell
+                                .fill(self.colors.accent_tint)
+                                .stroke(egui::Stroke::new(1.0, self.colors.accent));
+                        }
+                        if ui.add_enabled(!connecting, cell).clicked() {
+                            self.wallet_modal = mode;
+                        }
+                    }
+                });
+            },
+        );
         ui.add_space(8.0);
         let (rule, _) =
             ui.allocate_exact_size(egui::vec2(ui.available_width(), 1.0), egui::Sense::hover());

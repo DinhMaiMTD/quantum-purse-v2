@@ -176,6 +176,7 @@ impl App {
             self.wallet_modal = WalletModal::Create;
             self.new_wallet_name.clear();
             self.new_wallet_variant = qpv2_core::types::SpxVariant::Sha2128S;
+            self.import_from_v1 = false;
             self.wallet_selector_open = false;
         }
     }

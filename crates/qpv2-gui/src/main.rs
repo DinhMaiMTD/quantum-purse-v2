@@ -725,8 +725,8 @@ fn main() -> eframe::Result {
 
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1100.0, 620.0])
-            .with_min_inner_size([1100.0, 620.0])
+            .with_inner_size([1100.0, 720.0])
+            .with_min_inner_size([1100.0, 720.0])
             .with_title("Quantum Purse")
             // Wayland resolves the launcher icon by matching this to the
             // installed .desktop file; keep it equal to the bundle id and
