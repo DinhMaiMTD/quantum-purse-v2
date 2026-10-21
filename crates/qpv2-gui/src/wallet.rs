@@ -238,7 +238,7 @@ impl App {
         self.spendable_balances.clear();
         self.rename_wallet_id = None;
         self.rename_wallet_buf.clear();
-        self.import_mode = false;
+        self.is_import_mode = false;
         self.wallet_modal = crate::types::WalletModal::None;
         self.set_block_editing = false;
         self.set_block_input.clear();

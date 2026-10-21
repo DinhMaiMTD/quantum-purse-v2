@@ -3,13 +3,12 @@
 
 use crate::types::{display_font, label_font, Status, Tab};
 use crate::ui::utils::{
-    accent_button, blinking_cursor, breathing_dot, ghost_button, panel_frame, section_header,
-    trezor_waiting_line, v1_import_checkbox, value_flash,
+    accent_button, blinking_cursor, breathing_dot, ghost_button, panel_frame, value_flash,
 };
 use crate::App;
 use ckb_node::NodeType;
 use eframe::egui;
-use qpv2_core::types::{AuthMethod, SingleSigConvention, SpxVariant};
+use qpv2_core::types::AuthMethod;
 
 /// Height of the top telemetry strip.
 const TELEMETRY_H: f32 = 38.0;
@@ -668,47 +667,14 @@ impl App {
                 egui::vec2(panel_w, 0.0),
                 egui::Layout::top_down(egui::Align::Min),
                 |ui| {
-                    // Each section sits in its own panel with the dark
-                    // background showing between them, so the areas read
-                    // as separate blocks rather than one run-on column
-                    // under tiny headers.
-                    let gap = 10.0;
-                    let inner_w = panel_w - 30.0;
-
+                    // The New Vault dialog's form, minus its Cancel.
                     panel_frame(&self.colors).show(ui, |ui| {
-                        ui.set_width(inner_w);
-                        section_header(ui, &self.colors, "01", "Parameter Set");
-                        ui.add_space(8.0);
-                        self.draw_variant_grid(ui, inner_w);
-                    });
-                    ui.add_space(gap);
-
-                    panel_frame(&self.colors).show(ui, |ui| {
-                        ui.set_width(inner_w);
-                        section_header(ui, &self.colors, "02", "Create New Wallet");
-                        ui.add_space(8.0);
-                        self.draw_auth_row(ui, inner_w, false);
-                    });
-                    ui.add_space(gap);
-
-                    panel_frame(&self.colors).show(ui, |ui| {
-                        ui.set_width(inner_w);
-                        section_header(ui, &self.colors, "03", "Connect Hardware Wallet");
-                        ui.add_space(8.0);
-                        self.draw_trezor_connect_button(ui, inner_w);
-                    });
-                    ui.add_space(gap);
-
-                    panel_frame(&self.colors).show(ui, |ui| {
-                        ui.set_width(inner_w);
-                        section_header(ui, &self.colors, "04", "Restore From Seed Phrase");
-                        ui.add_space(8.0);
-                        // v1 web-wallet mnemonics derive the same keys but
-                        // need the v1 single-sig address format for existing
-                        // funds to stay visible.
-                        v1_import_checkbox(ui, &self.colors, &mut self.import_from_v1);
-                        ui.add_space(8.0);
-                        self.draw_auth_row(ui, inner_w, true);
+                        ui.set_width(panel_w - 30.0);
+                        if let Some(is_import) =
+                            self.create_import_wallet_form(ui, self.is_import_mode)
+                        {
+                            self.is_import_mode = is_import;
+                        }
                     });
                 },
             );
@@ -721,174 +687,6 @@ impl App {
                 egui::Layout::top_down(egui::Align::Min),
                 |ui| self.show_status(ui),
             );
-        });
-    }
-
-    /// 6×2 table of SPHINCS+ parameter-set cells with shared hairline
-    /// borders, so the picker reads as one unit instead of twelve chips.
-    fn draw_variant_grid(&mut self, ui: &mut egui::Ui, width: f32) {
-        // Row-major, so the first six are the top row (SHA2) and the
-        // last six the bottom row (SHAKE): one hash family per line.
-        const VARIANTS: [SpxVariant; 12] = [
-            SpxVariant::Sha2128S,
-            SpxVariant::Sha2128F,
-            SpxVariant::Sha2192S,
-            SpxVariant::Sha2192F,
-            SpxVariant::Sha2256S,
-            SpxVariant::Sha2256F,
-            SpxVariant::Shake128S,
-            SpxVariant::Shake128F,
-            SpxVariant::Shake192S,
-            SpxVariant::Shake192F,
-            SpxVariant::Shake256S,
-            SpxVariant::Shake256F,
-        ];
-
-        let cell_w = width / 6.0;
-        let cell_h = 24.0;
-
-        let (grid, response) =
-            ui.allocate_exact_size(egui::vec2(width, 2.0 * cell_h), egui::Sense::click());
-
-        let cell_rect = |row: usize, col: usize| {
-            egui::Rect::from_min_size(
-                grid.min + egui::vec2(col as f32 * cell_w, row as f32 * cell_h),
-                egui::vec2(cell_w, cell_h),
-            )
-        };
-        let cell_at = |pos: egui::Pos2| {
-            let rel = pos - grid.min;
-            (
-                ((rel.y / cell_h).floor() as usize).min(1),
-                ((rel.x / cell_w).floor() as usize).min(5),
-            )
-        };
-
-        let hovered = response.hover_pos().map(cell_at);
-        if hovered.is_some() {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-        }
-        if response.clicked() {
-            if let Some(pos) = response.interact_pointer_pos() {
-                let (row, col) = cell_at(pos);
-                self.selected_variant = VARIANTS[row * 6 + col];
-            }
-        }
-
-        let painter = ui.painter();
-
-        // Shared interior hairlines plus one outer border, so cells
-        // form a contiguous table instead of separated chips.
-        let hairline = egui::Stroke::new(1.0, self.colors.border);
-        for col in 1..6 {
-            let x = grid.left() + col as f32 * cell_w;
-            painter.vline(x, grid.y_range(), hairline);
-        }
-        painter.hline(grid.x_range(), grid.center().y, hairline);
-        painter.rect_stroke(grid, 0.0, hairline, egui::StrokeKind::Inside);
-
-        for row in 0..2 {
-            for col in 0..6 {
-                let variant = VARIANTS[row * 6 + col];
-                let selected = self.selected_variant == variant;
-                let is_hovered = hovered == Some((row, col));
-                let rect = cell_rect(row, col);
-
-                if selected {
-                    painter.rect_filled(rect, 0.0, self.colors.accent_tint);
-                    painter.rect_stroke(
-                        rect,
-                        0.0,
-                        egui::Stroke::new(1.0, self.colors.accent),
-                        egui::StrokeKind::Inside,
-                    );
-                } else if is_hovered {
-                    painter.rect_stroke(
-                        rect,
-                        0.0,
-                        egui::Stroke::new(1.0, self.colors.border2),
-                        egui::StrokeKind::Inside,
-                    );
-                }
-
-                let (hash, param) = variant_parts(variant);
-                let text_color = if selected {
-                    self.colors.accent
-                } else if is_hovered {
-                    self.colors.text
-                } else {
-                    self.colors.text_muted
-                };
-                painter.text(
-                    rect.center(),
-                    egui::Align2::CENTER_CENTER,
-                    format!("{}-{}", hash, param),
-                    label_font(10.0),
-                    text_color,
-                );
-            }
-        }
-    }
-
-    /// A single full-width button that imports accounts from a connected
-    /// Trezor as a new watch-only wallet. While the import runs the button
-    /// waits and points the user at the device, which is where the PIN and
-    /// address confirmations are answered.
-    fn draw_trezor_connect_button(&mut self, ui: &mut egui::Ui, width: f32) {
-        let size = egui::vec2(width, 34.0);
-        let waiting = self.trezor_connect_rx.is_some();
-        ui.horizontal(|ui| {
-            let btn = ghost_button(&self.colors, "Connect Trezor", size);
-            if ui.add_enabled(!waiting, btn).clicked() {
-                self.start_create_trezor_watch_only_wallet(self.selected_variant, 1);
-            }
-        });
-        if waiting {
-            ui.add_space(8.0);
-            trezor_waiting_line(ui, &self.colors);
-        }
-    }
-
-    /// One row of three auth-method buttons (create or import).
-    fn draw_auth_row(&mut self, ui: &mut egui::Ui, width: f32, import: bool) {
-        let gap = 6.0;
-        let btn_w = (width - 2.0 * gap) / 3.0;
-        let size = egui::vec2(btn_w, 34.0);
-        // A Trezor import in flight owns both the device and this screen's
-        // outcome. Finishing another wallet here would strand that worker
-        // mid-conversation, and it keeps the device claimed until it returns
-        // — the next Trezor action would then fail as "busy with another
-        // operation". Cheaper to not let the two races start.
-        let device_busy = self.trezor_connect_rx.is_some();
-        let labels = [
-            keychain::short_name().to_string(),
-            "Security Key".to_string(),
-            "Password".to_string(),
-        ];
-
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = gap;
-            for (idx, label) in labels.iter().enumerate() {
-                // Uniform ghost buttons: a solid one would read as a
-                // selected state next to the parameter grid above,
-                // and these are actions, not options.
-                let btn = ghost_button(&self.colors, label, size);
-                if ui.add_enabled(!device_busy, btn).clicked() {
-                    let v = self.selected_variant;
-                    let ssc = SingleSigConvention::new(self.import_from_v1);
-                    match (import, idx) {
-                        (false, 0) => self.create_wallet_with_keychain(v),
-                        (false, 1) => self.create_wallet_with_fido2(v),
-                        (false, _) => self.create_wallet_with_password(v),
-                        (true, 0) => self.import_seed_phrase_with_keychain(v, ssc),
-                        (true, 1) => self.import_seed_phrase_with_fido2(v, ssc),
-                        (true, _) => self.import_seed_phrase_with_password(v, ssc),
-                    }
-                    // The v1 choice is consumed by this action; a stale
-                    // `true` would pre-check the box on the next import.
-                    self.import_from_v1 = false;
-                }
-            }
         });
     }
 
@@ -1146,22 +944,5 @@ fn type_on(
         text.chars().take(shown).collect()
     } else {
         text.to_string()
-    }
-}
-
-fn variant_parts(v: SpxVariant) -> (&'static str, &'static str) {
-    match v {
-        SpxVariant::Sha2128S => ("SHA2", "128S"),
-        SpxVariant::Sha2128F => ("SHA2", "128F"),
-        SpxVariant::Shake128S => ("SHAKE", "128S"),
-        SpxVariant::Shake128F => ("SHAKE", "128F"),
-        SpxVariant::Sha2192S => ("SHA2", "192S"),
-        SpxVariant::Sha2192F => ("SHA2", "192F"),
-        SpxVariant::Shake192S => ("SHAKE", "192S"),
-        SpxVariant::Shake192F => ("SHAKE", "192F"),
-        SpxVariant::Sha2256S => ("SHA2", "256S"),
-        SpxVariant::Sha2256F => ("SHA2", "256F"),
-        SpxVariant::Shake256S => ("SHAKE", "256S"),
-        SpxVariant::Shake256F => ("SHAKE", "256F"),
     }
 }

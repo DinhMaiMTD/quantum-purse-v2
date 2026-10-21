@@ -400,6 +400,11 @@ pub(crate) fn panel_frame(colors: &AppColors) -> egui::Frame {
 /// pass. Both layers must sit at `Order::Foreground`, which is where egui
 /// puts ComboBox popups.
 pub(crate) fn pin_popup_above_modal(ui: &egui::Ui, combo: &egui::Response) {
+    // Only dialogs need this. On the setup screen the form sits on the background layer,
+    // and egui forbids linking that to the dropdown's foreground layer (debug builds abort).
+    if ui.layer_id().order != egui::Order::Foreground {
+        return;
+    }
     ui.ctx().set_sublayer(
         ui.layer_id(),
         egui::LayerId::new(

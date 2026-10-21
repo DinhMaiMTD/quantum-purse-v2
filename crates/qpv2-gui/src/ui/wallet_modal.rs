@@ -2,6 +2,7 @@
 //! Flight Deck idiom: sharp hairline-framed surface, indexed sections.
 //! Seed phrase entry/reveal happens in the external pinentry prompt,
 //! so the modal only collects name, parameter set, and auth method.
+//! Its form, `create_import_wallet_form`, is also the setup screen's.
 
 use eframe::egui;
 use qpv2_core::types::{SingleSigConvention, SpxVariant};
@@ -42,7 +43,7 @@ impl App {
 
         let modal_pos = egui::pos2(
             (screen_rect.width() - MODAL_W) / 2.0,
-            screen_rect.height() * 0.18,
+            screen_rect.height() * 0.1,
         );
 
         egui::Area::new(egui::Id::new("wallet_modal_area"))
@@ -55,11 +56,44 @@ impl App {
                     .inner_margin(egui::Margin::symmetric(20, 18))
                     .show(ui, |ui| {
                         ui.set_width(MODAL_W);
-                        self.wallet_modal_contents(ui, is_import);
+                        if let Some(import) = self.create_import_wallet_form(ui, is_import) {
+                            self.wallet_modal = if import {
+                                WalletModal::Import
+                            } else {
+                                WalletModal::Create
+                            };
+                        }
+
+                        // Cancel belongs to the dialog; the setup screen shows
+                        // the form without it.
+                        ui.add_space(14.0);
+                        let (rule, _) = ui.allocate_exact_size(
+                            egui::vec2(ui.available_width(), 1.0),
+                            egui::Sense::hover(),
+                        );
+                        ui.painter().hline(
+                            rule.x_range(),
+                            rule.center().y,
+                            egui::Stroke::new(1.0, self.colors.border),
+                        );
+                        ui.add_space(10.0);
+                        let cancel = ghost_button(
+                            &self.colors,
+                            "Cancel",
+                            egui::vec2(ui.available_width(), 34.0),
+                        );
+                        if ui
+                            .add_enabled(self.trezor_connect_rx.is_none(), cancel)
+                            .clicked()
+                        {
+                            self.wallet_modal = WalletModal::None;
+                            self.new_wallet_name.clear();
+                            self.import_from_v1 = false;
+                        }
                     });
             });
 
-        // A Trezor import keeps the dialog open; see `wallet_modal_contents`.
+        // A Trezor connect keeps the dialog open; see `create_import_wallet_form`.
         if backdrop_clicked && self.trezor_connect_rx.is_none() {
             self.wallet_modal = WalletModal::None;
             self.new_wallet_name.clear();
@@ -67,7 +101,14 @@ impl App {
         }
     }
 
-    fn wallet_modal_contents(&mut self, ui: &mut egui::Ui, is_import: bool) {
+    /// The create / import form, shared by the New Vault dialog and the setup
+    /// screen. Returns the mode picked on its toggle; each caller stores it.
+    pub(crate) fn create_import_wallet_form(
+        &mut self,
+        ui: &mut egui::Ui,
+        is_import: bool,
+    ) -> Option<bool> {
+        let mut picked = None;
         let c_accent = self.colors.accent;
         let c_muted = self.colors.text_muted;
         let c_border = self.colors.border;
@@ -98,18 +139,15 @@ impl App {
                 );
                 // Right to left, so the modes are listed in reverse.
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    for (label, mode) in [
-                        ("IMPORT", WalletModal::Import),
-                        ("CREATE", WalletModal::Create),
-                    ] {
+                    for (label, import) in [("IMPORT", true), ("CREATE", false)] {
                         let mut cell = ghost_button(&self.colors, label, toggle_size);
-                        if self.wallet_modal == mode {
+                        if import == is_import {
                             cell = cell
                                 .fill(self.colors.accent_tint)
                                 .stroke(egui::Stroke::new(1.0, self.colors.accent));
                         }
                         if ui.add_enabled(!connecting, cell).clicked() {
-                            self.wallet_modal = mode;
+                            picked = Some(import);
                         }
                     }
                 });
@@ -289,23 +327,6 @@ impl App {
             trezor_waiting_line(ui, &self.colors);
         }
 
-        ui.add_space(14.0);
-        let (rule, _) =
-            ui.allocate_exact_size(egui::vec2(ui.available_width(), 1.0), egui::Sense::hover());
-        ui.painter().hline(
-            rule.x_range(),
-            rule.center().y,
-            egui::Stroke::new(1.0, c_border),
-        );
-        ui.add_space(10.0);
-
-        if ui
-            .add_enabled(!connecting, ghost_button(&self.colors, "Cancel", btn_size))
-            .clicked()
-        {
-            self.wallet_modal = WalletModal::None;
-            self.new_wallet_name.clear();
-            self.import_from_v1 = false;
-        }
+        picked
     }
 }

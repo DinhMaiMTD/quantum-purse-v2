@@ -69,9 +69,8 @@ pub(crate) struct App {
     // Wallet create/import modal state.
     pub(crate) wallet_modal: types::WalletModal,
 
-    // Setup screen state.
-    pub(crate) selected_variant: SpxVariant,
-    pub(crate) import_mode: bool,
+    // Setup screen state: whether its wallet form is in import mode.
+    pub(crate) is_import_mode: bool,
 
     // Unlocked screen state.
     pub(crate) active_tab: Tab,
@@ -458,8 +457,7 @@ impl App {
             new_wallet_variant: SpxVariant::Sha2128S,
             import_from_v1: false,
             wallet_modal: types::WalletModal::None,
-            selected_variant: SpxVariant::Sha2128S,
-            import_mode: false,
+            is_import_mode: false,
             active_tab: Tab::Dashboard,
             accounts,
             rename_wallet_id: None,
@@ -725,8 +723,8 @@ fn main() -> eframe::Result {
 
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1100.0, 720.0])
-            .with_min_inner_size([1100.0, 720.0])
+            .with_inner_size([1100.0, 640.0])
+            .with_min_inner_size([1100.0, 640.0])
             .with_title("Quantum Purse")
             // Wayland resolves the launcher icon by matching this to the
             // installed .desktop file; keep it equal to the bundle id and
