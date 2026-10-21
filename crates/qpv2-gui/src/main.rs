@@ -454,7 +454,7 @@ impl App {
             wallet_selector_open: false,
             wallet_selector_rect: None,
             new_wallet_name: String::new(),
-            new_wallet_variant: SpxVariant::Sha2128S,
+            new_wallet_variant: SpxVariant::Sha2128F,
             import_from_v1: false,
             wallet_modal: types::WalletModal::None,
             is_import_mode: false,
