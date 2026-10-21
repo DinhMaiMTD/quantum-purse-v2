@@ -587,8 +587,8 @@ impl eframe::App for App {
 
         self.tick_status(&ctx);
 
-        // Not gated on the screen: this one starts on Setup and is what
-        // moves us off it.
+        // Not gated on the screen: this one can start on Setup and is what
+        // moves us off it (it can also start from the New Vault dialog).
         self.poll_trezor_import();
 
         // Device link: probed on its own cadence, polled everywhere. Both are

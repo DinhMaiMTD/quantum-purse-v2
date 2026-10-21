@@ -589,8 +589,9 @@ impl App {
 
     /// Pick up the accounts read from a Trezor by `create_trezor_watch_only_wallet`
     /// and turn them into a wallet. Runs on every screen, unlike the balance
-    /// pollers: the import starts on the setup screen and is what moves us
-    /// off it.
+    /// pollers: the import can start on the setup screen, where they don't
+    /// run, and is what moves us off it. It can also start from the New Vault
+    /// dialog once a wallet is open.
     pub(crate) fn poll_trezor_import(&mut self) {
         let rx = match &self.trezor_connect_rx {
             Some(rx) => rx,

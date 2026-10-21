@@ -857,8 +857,8 @@ impl App {
         // A Trezor import in flight owns both the device and this screen's
         // outcome. Finishing another wallet here would strand that worker
         // mid-conversation, and it keeps the device claimed until it returns
-        // — the next Trezor action would then fail as "in use by another
-        // application". Cheaper to not let the two races start.
+        // — the next Trezor action would then fail as "busy with another
+        // operation". Cheaper to not let the two races start.
         let device_busy = self.trezor_connect_rx.is_some();
         let labels = [
             keychain::short_name().to_string(),

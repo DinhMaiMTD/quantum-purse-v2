@@ -185,8 +185,8 @@ impl App {
         // While a Trezor import runs, the dialog stays open to point the user
         // at the device, and every other way out is disabled. Finishing or
         // leaving would drop the import mid-conversation with the device,
-        // which then stays claimed and fails the next Trezor action as "in
-        // use by another application". The user cancels on the Trezor instead.
+        // which then stays claimed and fails the next Trezor action as "busy
+        // with another operation". The user cancels on the Trezor instead.
         let device_busy = self.trezor_connect_rx.is_some();
 
         let single_sig_convention = SingleSigConvention::new(self.import_from_v1);
@@ -251,8 +251,9 @@ impl App {
         // phrase and is offered only when creating. The device checks the
         // chosen parameter set against its seed and names the ones that fit
         // if it doesn't. Unlike the buttons above, this one leaves the dialog
-        // open: success closes it by switching to the new wallet, and failure
-        // closes it in `poll_trezor_import`.
+        // open: success closes it by switching to the new wallet, while a
+        // failure leaves it open with the name and parameter set kept for a
+        // retry, and reports the error in the status line.
         if !is_import {
             ui.add_space(6.0);
             if ui

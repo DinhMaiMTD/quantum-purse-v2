@@ -902,8 +902,9 @@ impl App {
     ///
     /// Runs on a worker thread: a locked device holds the connect open until
     /// the user has typed their PIN, and every address needs an on-device
-    /// confirmation after that, so the setup screen has to keep painting to
-    /// tell the user what the device is waiting for. `poll_trezor_import`
+    /// confirmation after that, so the screen it was started from (the setup
+    /// screen or the New Vault dialog) has to keep painting to tell the user
+    /// what the device is waiting for. `poll_trezor_import`
     /// picks up the result and creates the wallet. No-op while an import is
     /// already in flight.
     pub(crate) fn create_trezor_watch_only_wallet(
