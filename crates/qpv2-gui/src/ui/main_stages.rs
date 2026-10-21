@@ -836,7 +836,7 @@ impl App {
     /// address confirmations are answered.
     fn draw_trezor_connect_button(&mut self, ui: &mut egui::Ui, width: f32) {
         let size = egui::vec2(width, 34.0);
-        let waiting = self.trezor_import_rx.is_some();
+        let waiting = self.trezor_connect_rx.is_some();
         ui.horizontal(|ui| {
             let btn = ghost_button(&self.colors, "Connect Trezor", size);
             if ui.add_enabled(!waiting, btn).clicked() {
@@ -859,7 +859,7 @@ impl App {
         // mid-conversation, and it keeps the device claimed until it returns
         // — the next Trezor action would then fail as "in use by another
         // application". Cheaper to not let the two races start.
-        let device_busy = self.trezor_import_rx.is_some();
+        let device_busy = self.trezor_connect_rx.is_some();
         let labels = [
             keychain::short_name().to_string(),
             "Security Key".to_string(),

@@ -592,24 +592,24 @@ impl App {
     /// pollers: the import starts on the setup screen and is what moves us
     /// off it.
     pub(crate) fn poll_trezor_import(&mut self) {
-        let rx = match &self.trezor_import_rx {
+        let rx = match &self.trezor_connect_rx {
             Some(rx) => rx,
             None => return,
         };
 
         match rx.try_recv() {
             Ok(Ok((model, variant, accounts))) => {
-                self.trezor_import_rx = None;
+                self.trezor_connect_rx = None;
                 self.finish_trezor_import(model, variant, accounts);
             }
             Ok(Err(e)) => {
-                self.trezor_import_rx = None;
+                self.trezor_connect_rx = None;
                 tracing::error!("{}", e);
                 self.status = Status::Error(e);
             }
             Err(mpsc::TryRecvError::Empty) => {}
             Err(mpsc::TryRecvError::Disconnected) => {
-                self.trezor_import_rx = None;
+                self.trezor_connect_rx = None;
                 let msg = "Trezor import thread terminated unexpectedly.".to_string();
                 tracing::error!("{}", msg);
                 self.status = Status::Error(msg);

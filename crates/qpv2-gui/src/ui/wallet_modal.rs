@@ -60,7 +60,7 @@ impl App {
             });
 
         // A Trezor import keeps the dialog open; see `wallet_modal_contents`.
-        if backdrop_clicked && self.trezor_import_rx.is_none() {
+        if backdrop_clicked && self.trezor_connect_rx.is_none() {
             self.wallet_modal = WalletModal::None;
             self.new_wallet_name.clear();
             self.import_from_v1 = false;
@@ -187,7 +187,7 @@ impl App {
         // leaving would drop the import mid-conversation with the device,
         // which then stays claimed and fails the next Trezor action as "in
         // use by another application". The user cancels on the Trezor instead.
-        let device_busy = self.trezor_import_rx.is_some();
+        let device_busy = self.trezor_connect_rx.is_some();
 
         let single_sig_convention = SingleSigConvention::new(self.import_from_v1);
 

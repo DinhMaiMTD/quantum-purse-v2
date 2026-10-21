@@ -254,7 +254,7 @@ impl App {
         // Also cancels a pending Trezor import when the user creates or
         // switches to another wallet instead of finishing it — otherwise its
         // late result would create a second wallet and yank the user into it.
-        self.trezor_import_rx = None;
+        self.trezor_connect_rx = None;
         // Link status belongs to the wallet being left; a late probe result
         // would otherwise describe the old wallet's device.
         self.device_status_rx = None;
@@ -911,13 +911,13 @@ impl App {
         variant: SpxVariant,
         account_count: u32,
     ) {
-        if self.trezor_import_rx.is_some() {
+        if self.trezor_connect_rx.is_some() {
             return;
         }
         let is_mainnet = self.qp_client.is_mainnet();
 
         let (tx, rx) = std::sync::mpsc::channel();
-        self.trezor_import_rx = Some(rx);
+        self.trezor_connect_rx = Some(rx);
 
         std::thread::spawn(move || {
             let result = (|| -> TrezorImportUpdate {
@@ -958,7 +958,7 @@ impl App {
     /// that displays "busy" must consult this, not the probe, or it will show a
     /// device as available in the middle of a signature.
     pub(crate) fn trezor_operation_in_flight(&self) -> bool {
-        self.trezor_import_rx.is_some()
+        self.trezor_connect_rx.is_some()
             || self.trezor_reconnect_rx.is_some()
             // Signing shares its channel with the other auth methods, so it
             // only implies device work on a device-backed wallet.

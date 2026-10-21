@@ -211,7 +211,7 @@ pub(crate) struct App {
     // screen. Some(_) means the device is being talked to — the connect
     // button waits and tells the user to look at the device, since a locked
     // Trezor holds the handshake open until its PIN is entered.
-    pub(crate) trezor_import_rx: Option<mpsc::Receiver<TrezorImportUpdate>>,
+    pub(crate) trezor_connect_rx: Option<mpsc::Receiver<TrezorImportUpdate>>,
     // How the seed-export thread tells the main UI thread it is done. Some while
     // that thread owns the pinentry dialog; the overlay locks the wallet meanwhile.
     pub(crate) seed_export_dialog_done_rx: Option<mpsc::Receiver<Result<(), String>>>,
@@ -520,7 +520,7 @@ impl App {
             // each flow that needs it; cached `None` here. Setup screen
             // doesn't need it; Locked screen reads it before rendering.
             auth_method,
-            trezor_import_rx: None,
+            trezor_connect_rx: None,
             seed_export_dialog_done_rx: None,
             device_status: trezor_connect::DeviceStatus::Working,
             device_status_rx: None,
@@ -688,7 +688,7 @@ impl eframe::App for App {
 
         if async_pending {
             ctx.request_repaint();
-        } else if self.trezor_import_rx.is_some() || self.seed_export_dialog_done_rx.is_some() {
+        } else if self.trezor_connect_rx.is_some() || self.seed_export_dialog_done_rx.is_some() {
             // A frame is what checks the channel, so the repaint rate is the
             // poll rate. These waits are human-paced — someone typing a PIN on
             // the device, or reading a seed phrase in the secure dialog — so
