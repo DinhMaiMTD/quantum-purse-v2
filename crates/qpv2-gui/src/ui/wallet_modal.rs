@@ -182,12 +182,18 @@ impl App {
         let verb = if is_import { "Import" } else { "Create" };
         let full_w = ui.available_width();
         let btn_size = egui::vec2(full_w, 34.0);
-        // While a Trezor import runs, the dialog stays open to point the user
-        // at the device, and every other way out is disabled. Finishing or
-        // leaving would drop the import mid-conversation with the device,
-        // which then stays claimed and fails the next Trezor action as "busy
-        // with another operation". The user cancels on the Trezor instead.
-        let device_busy = self.trezor_connect_rx.is_some();
+        // While a Trezor import started here runs, the dialog stays open to
+        // point the user at the device, and every other way out is disabled.
+        // Finishing or leaving would drop the import mid-conversation with
+        // the device, which then stays claimed and fails the next Trezor
+        // action as "busy with another operation". The user cancels on the
+        // Trezor instead.
+        let connecting = self.trezor_connect_rx.is_some();
+        // Any of our Trezor operations also disables the create buttons,
+        // including a reconnect or a signing for the open wallet: creating a
+        // wallet switches to it and would drop that operation the same way,
+        // and a second connect would only fail as busy.
+        let device_busy = self.trezor_operation_in_flight();
 
         let single_sig_convention = SingleSigConvention::new(self.import_from_v1);
 
@@ -265,7 +271,7 @@ impl App {
             {
                 self.create_trezor_watch_only_wallet(self.new_wallet_variant, 1);
             }
-            if device_busy {
+            if connecting {
                 ui.add_space(8.0);
                 trezor_waiting_line(ui, &self.colors);
             }
@@ -282,7 +288,7 @@ impl App {
         ui.add_space(10.0);
 
         if ui
-            .add_enabled(!device_busy, ghost_button(&self.colors, "Cancel", btn_size))
+            .add_enabled(!connecting, ghost_button(&self.colors, "Cancel", btn_size))
             .clicked()
         {
             self.wallet_modal = WalletModal::None;
