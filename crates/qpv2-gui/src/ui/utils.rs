@@ -591,6 +591,27 @@ pub(crate) fn breathing_dot(
     painter.circle_filled(center, 5.5, halo);
 }
 
+/// The line shown under a Connect Trezor button while an import waits on
+/// the device, which is where the PIN and address confirmations are
+/// answered. Used by the setup screen and the New Vault dialog.
+pub(crate) fn trezor_waiting_line(ui: &mut egui::Ui, colors: &AppColors) {
+    ui.horizontal(|ui| {
+        let t = ui.input(|i| i.time) as f32;
+        // Amber, and pulsing at the urgent rate: everything else around it
+        // is cyan chrome or muted body text, so the one line that is
+        // waiting on the user has the only warm colour. Accent cyan would
+        // have read as decoration.
+        let attention = colors.warn;
+        let (dot, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
+        breathing_dot(ui.painter(), dot.center(), attention, t, true);
+        ui.label(
+            egui::RichText::new("Follow the instructions on your Trezor's screen.")
+                .font(label_font(10.0))
+                .color(attention),
+        );
+    });
+}
+
 /// Blinking block cursor (1.2Hz square wave), the terminal idiom used
 /// beside active titles and prompts.
 pub(crate) fn blinking_cursor(

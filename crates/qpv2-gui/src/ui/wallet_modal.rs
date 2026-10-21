@@ -8,7 +8,8 @@ use qpv2_core::types::{SingleSigConvention, SpxVariant};
 
 use crate::types::{label_font, WalletModal};
 use crate::ui::utils::{
-    ghost_button, pin_popup_above_modal, section_header, v1_import_checkbox, SectionCounter,
+    ghost_button, pin_popup_above_modal, section_header, trezor_waiting_line, v1_import_checkbox,
+    SectionCounter,
 };
 use crate::App;
 
@@ -58,7 +59,8 @@ impl App {
                     });
             });
 
-        if backdrop_clicked {
+        // A Trezor import keeps the dialog open; see `wallet_modal_contents`.
+        if backdrop_clicked && self.trezor_import_rx.is_none() {
             self.wallet_modal = WalletModal::None;
             self.new_wallet_name.clear();
             self.import_from_v1 = false;
@@ -180,12 +182,21 @@ impl App {
         let verb = if is_import { "Import" } else { "Create" };
         let full_w = ui.available_width();
         let btn_size = egui::vec2(full_w, 34.0);
+        // While a Trezor import runs, the dialog stays open to point the user
+        // at the device, and every other way out is disabled. Finishing or
+        // leaving would drop the import mid-conversation with the device,
+        // which then stays claimed and fails the next Trezor action as "in
+        // use by another application". The user cancels on the Trezor instead.
+        let device_busy = self.trezor_import_rx.is_some();
 
         let single_sig_convention = SingleSigConvention::new(self.import_from_v1);
 
         let kc_label = format!("{} // {}", verb, keychain::short_name());
         if ui
-            .add(ghost_button(&self.colors, &kc_label, btn_size))
+            .add_enabled(
+                !device_busy,
+                ghost_button(&self.colors, &kc_label, btn_size),
+            )
             .clicked()
         {
             let v = self.new_wallet_variant;
@@ -201,7 +212,10 @@ impl App {
         ui.add_space(6.0);
         let fido_label = format!("{} // Security Key", verb);
         if ui
-            .add(ghost_button(&self.colors, &fido_label, btn_size))
+            .add_enabled(
+                !device_busy,
+                ghost_button(&self.colors, &fido_label, btn_size),
+            )
             .clicked()
         {
             let v = self.new_wallet_variant;
@@ -217,7 +231,10 @@ impl App {
         ui.add_space(6.0);
         let pw_label = format!("{} // Password", verb);
         if ui
-            .add(ghost_button(&self.colors, &pw_label, btn_size))
+            .add_enabled(
+                !device_busy,
+                ghost_button(&self.colors, &pw_label, btn_size),
+            )
             .clicked()
         {
             let v = self.new_wallet_variant;
@@ -228,6 +245,29 @@ impl App {
             }
             self.wallet_modal = WalletModal::None;
             self.import_from_v1 = false;
+        }
+
+        // A Trezor holds its own seed, so it has nothing to restore from a
+        // phrase and is offered only when creating. The device checks the
+        // chosen parameter set against its seed and names the ones that fit
+        // if it doesn't. Unlike the buttons above, this one leaves the dialog
+        // open: success closes it by switching to the new wallet, and failure
+        // closes it in `poll_trezor_import`.
+        if !is_import {
+            ui.add_space(6.0);
+            if ui
+                .add_enabled(
+                    !device_busy,
+                    ghost_button(&self.colors, "Connect // Trezor", btn_size),
+                )
+                .clicked()
+            {
+                self.create_trezor_watch_only_wallet(self.new_wallet_variant, 1);
+            }
+            if device_busy {
+                ui.add_space(8.0);
+                trezor_waiting_line(ui, &self.colors);
+            }
         }
 
         ui.add_space(14.0);
@@ -241,7 +281,7 @@ impl App {
         ui.add_space(10.0);
 
         if ui
-            .add(ghost_button(&self.colors, "Cancel", btn_size))
+            .add_enabled(!device_busy, ghost_button(&self.colors, "Cancel", btn_size))
             .clicked()
         {
             self.wallet_modal = WalletModal::None;

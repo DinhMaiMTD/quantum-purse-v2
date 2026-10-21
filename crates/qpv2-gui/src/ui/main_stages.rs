@@ -4,7 +4,7 @@
 use crate::types::{display_font, label_font, Status, Tab};
 use crate::ui::utils::{
     accent_button, blinking_cursor, breathing_dot, ghost_button, panel_frame, section_header,
-    v1_import_checkbox, value_flash,
+    trezor_waiting_line, v1_import_checkbox, value_flash,
 };
 use crate::App;
 use ckb_node::NodeType;
@@ -845,21 +845,7 @@ impl App {
         });
         if waiting {
             ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                let t = ui.input(|i| i.time) as f32;
-                // Amber, and pulsing at the urgent rate: everything else on
-                // this screen is cyan chrome or muted body text, so the one
-                // line that is waiting on the user has the panel's only warm
-                // colour. Accent cyan would have read as decoration.
-                let attention = self.colors.warn;
-                let (dot, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
-                breathing_dot(ui.painter(), dot.center(), attention, t, true);
-                ui.label(
-                    egui::RichText::new("Follow the instructions on your Trezor's screen.")
-                        .font(label_font(10.0))
-                        .color(attention),
-                );
-            });
+            trezor_waiting_line(ui, &self.colors);
         }
     }
 
