@@ -157,11 +157,6 @@ impl App {
         draw_qp_logo_chip(ui.painter(), logo, self.colors.accent, self.colors.bg);
         ui.add_space(8.0);
         ui.label(
-            egui::RichText::new("QUANTUM PURSE")
-                .font(display_font(12.0))
-                .color(self.colors.text),
-        );
-        ui.label(
             egui::RichText::new(concat!("V", env!("CARGO_PKG_VERSION")).to_uppercase())
                 .font(label_font(9.0))
                 .color(self.colors.text_muted),
@@ -1061,29 +1056,74 @@ fn boot_lines(
         .text(rect.left_top(), egui::Align2::LEFT_TOP, typed, font, color);
 }
 
-/// The Quantum Purse mark: two rings forming a centred figure-eight (the
-/// qp∞ infinity) with short q/p descenders dropping from the crossing.
-/// A procedural rebuild of `assets/icon/icon.svg` — painter strokes only,
-/// so it is resolution-independent and identical across platforms with no
-/// font or image asset involved. Fractions are relative to the (square)
-/// chip rect.
-fn draw_qp_mark(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
+/// The Quantum Purse logo
+fn draw_qp_logo(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    mark: egui::Color32,
+    chip: egui::Color32,
+) {
+    use std::f32::consts::{FRAC_1_SQRT_2, SQRT_2};
+
+    // Placement matches icon.svg: 60-unit strokes on its 848-unit tile, with
+    // the crossing at y = 470.64 so the mark's bounding box is centred.
     let s = rect.width().min(rect.height());
-    let o = rect.left_top();
-    let p = |x: f32, y: f32| egui::pos2(o.x + x * s, o.y + y * s);
+    let unit = s * 60.0 / 848.0;
+    let centre = rect.left_top() + egui::vec2(0.5 * s, (470.64 - 88.0) / 848.0 * s);
+    let p = |x: f32, y: f32| centre + egui::vec2(x, y) * unit;
+    let stroke = egui::Stroke::new(unit, mark);
+    // Clockwise quads. Stems are polygons rather than rects so egui does not
+    // snap their edges to whole pixels and shift them against the rings.
+    let quad = |corners: [(f32, f32); 4], color: egui::Color32| {
+        painter.add(egui::Shape::convex_polygon(
+            corners.map(|(x, y)| p(x, y)).to_vec(),
+            color,
+            egui::Stroke::NONE,
+        ));
+    };
 
-    // The two infinity lobes, vertically centred.
-    let ring = egui::Stroke::new((s * 0.066).max(1.4), color);
-    let r = s * 0.198;
-    painter.circle_stroke(p(0.323, 0.5), r, ring);
-    painter.circle_stroke(p(0.677, 0.5), r, ring);
+    // Infinity: two 270° rings centred at x = ±3, joined by the diagonals of
+    // a 3×3 square, which touch both rings tangentially. One closed path:
+    // the left ring, the "/" diagonal, the right ring, then back along "\".
+    // Angles are in screen space (y down): the left ring runs from its
+    // upper-right touch point round the left to its lower-right one.
+    let radius = 1.5 * SQRT_2;
+    let mut path = Vec::with_capacity(66);
+    for (cx, from, to) in [(-3.0, -45.0_f32, -315.0_f32), (3.0, -135.0, 135.0)] {
+        for i in 0..=32 {
+            let a = (from + (to - from) * i as f32 / 32.0).to_radians();
+            path.push(p(cx + radius * a.cos(), radius * a.sin()));
+        }
+    }
+    painter.add(egui::Shape::closed_line(path, stroke));
 
-    // Descenders poking out the bottom of the crossing. Drawn longer than
-    // icon.svg's tail (which ends ~0.73) so the tail still reads at the
-    // 22px strip size, where the canonical short tail is sub-pixel.
-    let stem = egui::Stroke::new((s * 0.061).max(1.3), color);
-    painter.line_segment([p(0.481, 0.582), p(0.481, 0.77)], stem);
-    painter.line_segment([p(0.519, 0.582), p(0.519, 0.77)], stem);
+    // q and p stems, from the ring tops down past the rings. Each is split
+    // at the crossing, and both halves end hidden inside a diagonal. The gap
+    // between them is 0.39 stroke widths, kept to at least one physical
+    // pixel so the stems stay apart on the 22px chip on a 1x screen.
+    let g = (0.39 * unit).max(1.0 / painter.pixels_per_point()) / unit;
+    let (inner, outer) = (g / 2.0, g / 2.0 + 1.0);
+    let (top, split, bottom) = (-(radius + 0.5), g / 2.0 + 0.5, 4.0);
+    for (l, r) in [(-outer, -inner), (inner, outer)] {
+        quad([(l, top), (r, top), (r, -split), (l, -split)], mark);
+        quad([(l, split), (r, split), (r, bottom), (l, bottom)], mark);
+    }
+
+    // Weave: cut a gap beside the "\" diagonal, `g` wide measured
+    // horizontally like the stem gap, through what passes under it (the "/"
+    // diagonal, the upper p stem and the lower q stem), then redraw "\" so
+    // its edges stay crisp. The gap below "\" is the one above it turned
+    // half a turn about the crossing.
+    let h = FRAC_1_SQRT_2;
+    let above = [
+        (0.0, -h - g),
+        (outer, outer - h - g),
+        (outer, outer - h),
+        (0.0, -h),
+    ];
+    quad(above, chip);
+    quad(above.map(|(x, y)| (-x, -y)), chip);
+    painter.line_segment([p(-1.5, -1.5), p(1.5, 1.5)], stroke);
 }
 
 /// The app chip: solid accent rounded square with the qp∞ mark knocked
@@ -1098,16 +1138,7 @@ fn draw_qp_logo_chip(
 ) {
     let s = rect.width().min(rect.height());
     painter.rect_filled(rect, s * 0.222, chip);
-    draw_qp_mark(painter, rect, mark);
-    // Diagonal weave cut re-shows the chip color through the crossing.
-    // Drawn heavier than icon.svg's thread (0.035) so it still reads at
-    // the 22–56px sizes this chip renders at — a small-size optical bump.
-    let o = rect.left_top();
-    let p = |x: f32, y: f32| egui::pos2(o.x + x * s, o.y + y * s);
-    painter.line_segment(
-        [p(0.448, 0.568), p(0.552, 0.432)],
-        egui::Stroke::new((s * 0.052).max(1.4), chip),
-    );
+    draw_qp_logo(painter, rect, mark, chip);
 }
 
 /// Reveal `text` progressively at `cps` characters per second from the
