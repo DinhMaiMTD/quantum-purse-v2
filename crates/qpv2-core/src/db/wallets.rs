@@ -1,6 +1,6 @@
 use super::errors::KeyVaultDBError;
 use super::{get_data_dir, get_wallet_dir, get_wallet_info};
-use crate::types::WalletEntry;
+use crate::types::{AuthMethod, WalletEntry};
 use std::fs;
 
 fn wallets_root_dir() -> Result<std::path::PathBuf, KeyVaultDBError> {
@@ -78,11 +78,25 @@ pub fn validate_wallet_name(name: &str, exclude_id: Option<u32>) -> Result<(), K
     Ok(())
 }
 
+/// A FIDO2 wallet's name is baked into its security-key credential at
+/// registration, where a key with a screen (a Trezor) shows it on every
+/// confirm. The credential can't be renamed without replacing it, which
+/// would change the wallet's key, so the wallet keeps its name instead.
+pub const FIDO2_RENAME_ERROR: &str =
+    "A security-key wallet name can not be changed because it is part of the authentication input.";
+
 pub fn rename_wallet(wallet_id: u32, new_name: &str) -> Result<(), KeyVaultDBError> {
-    validate_wallet_name(new_name, Some(wallet_id))?;
     let mut info = get_wallet_info(wallet_id)?.ok_or_else(|| {
         KeyVaultDBError::DatabaseError(format!("Wallet '{}' not found.", wallet_id))
     })?;
+    // Before the name check, so the reason the rename is refused comes
+    // first rather than a complaint about the name chosen.
+    if matches!(info.auth_method, AuthMethod::Fido2 { .. }) {
+        return Err(KeyVaultDBError::DatabaseError(
+            FIDO2_RENAME_ERROR.to_string(),
+        ));
+    }
+    validate_wallet_name(new_name, Some(wallet_id))?;
     info.name = new_name.to_string();
     let path = get_wallet_dir(wallet_id)?.join("meta.json");
     let json = serde_json::to_string_pretty(&info)?;

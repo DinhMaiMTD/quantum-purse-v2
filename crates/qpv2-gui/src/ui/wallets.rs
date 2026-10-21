@@ -212,6 +212,7 @@ impl App {
                     AuthMethod::Trezor { .. } => "TREZOR".to_string(),
                 };
                 let cw_is_v1 = cw.single_sig_convention == SingleSigConvention::V1;
+                let fixed_name = matches!(cw.auth_method, AuthMethod::Fido2 { .. });
                 let cw_acct_count = cw.account_count;
                 let cw_path = cw.path.clone();
                 let is_active = cw_id == self.wallet_id;
@@ -275,6 +276,14 @@ impl App {
                                         self.rename_wallet_id = None;
                                         self.rename_wallet_buf.clear();
                                     }
+                                } else if fixed_name {
+                                    // Not a rename target; see FIDO2_RENAME_ERROR.
+                                    ui.add(egui::Label::new(
+                                        egui::RichText::new(&cw_name)
+                                            .size(11.5)
+                                            .color(self.colors.text),
+                                    ))
+                                    .on_hover_text(qpv2_core::db::wallets::FIDO2_RENAME_ERROR);
                                 } else {
                                     let label = egui::Label::new(
                                         egui::RichText::new(&cw_name)

@@ -575,11 +575,8 @@ impl App {
             Some(AuthMethod::Fido2 { credential_id }) => {
                 let cred_bytes = hex::decode(credential_id)
                     .map_err(|e| format!("Invalid credential ID: {}", e))?;
-                let pin = qpv2_core::pinentry::prompt_password(
-                    &format!("Enter your FIDO2 security key PIN to {}.", purpose),
-                    "PIN:",
-                )?;
-                let hmac_output = keychain::fido2::authenticate(&cred_bytes, &pin)?;
+                let verification = fido2_verification(purpose)?;
+                let hmac_output = keychain::fido2::authenticate(&cred_bytes, &verification)?;
                 qpv2_core::utilities::derive_vault_enc_key(&hmac_output)
                     .map(AuthKey::CryptoKey)
                     .map_err(|e| format!("Key derivation failed: {}", e))
@@ -1237,9 +1234,10 @@ impl App {
         );
     }
 
-    /// Create a FIDO2-authenticated wallet. Prompts for the device PIN
-    /// via pinentry, registers a credential, then derives the encryption
-    /// key via hmac-secret.
+    /// Create a FIDO2-authenticated wallet. Asks the key how it verifies
+    /// its user (a pinentry PIN dialog, or nothing for a key that verifies
+    /// on-device), registers a credential, then derives the encryption key
+    /// via hmac-secret.
     pub(crate) fn create_wallet_with_fido2(&mut self, variant: SpxVariant) {
         let (wallet_id, wallet_name) = match self.prepare_new_wallet() {
             Ok(v) => v,
@@ -1249,11 +1247,8 @@ impl App {
                 return;
             }
         };
-        let pin = match qpv2_core::pinentry::prompt_password(
-            "Enter your FIDO2 security key PIN to register a new credential.",
-            "PIN:",
-        ) {
-            Ok(s) => s,
+        let verification = match fido2_verification("register a new credential") {
+            Ok(v) => v,
             Err(e) => {
                 tracing::error!("{}", e);
                 self.status = Status::Error(e);
@@ -1261,7 +1256,7 @@ impl App {
             }
         };
 
-        let credential = match keychain::fido2::register(&pin) {
+        let credential = match keychain::fido2::register(&verification, &wallet_name) {
             Ok(c) => c,
             Err(e) => {
                 let msg = format!("FIDO2 registration failed: {}", e);
@@ -1273,15 +1268,16 @@ impl App {
 
         let credential_id = hex::encode(&credential.credential_id);
 
-        let hmac_output = match keychain::fido2::authenticate(&credential.credential_id, &pin) {
-            Ok(h) => h,
-            Err(e) => {
-                let msg = format!("FIDO2 authentication failed: {}", e);
-                tracing::error!("{}", msg);
-                self.status = Status::Error(msg);
-                return;
-            }
-        };
+        let hmac_output =
+            match keychain::fido2::authenticate(&credential.credential_id, &verification) {
+                Ok(h) => h,
+                Err(e) => {
+                    let msg = format!("FIDO2 authentication failed: {}", e);
+                    tracing::error!("{}", msg);
+                    self.status = Status::Error(msg);
+                    return;
+                }
+            };
 
         let key = match qpv2_core::utilities::derive_vault_enc_key(&hmac_output) {
             Ok(k) => k,
@@ -1337,11 +1333,8 @@ impl App {
             }
         };
 
-        let pin = match qpv2_core::pinentry::prompt_password(
-            "Enter your FIDO2 security key PIN to unlock.",
-            "PIN:",
-        ) {
-            Ok(s) => s,
+        let verification = match fido2_verification("unlock") {
+            Ok(v) => v,
             Err(e) => {
                 tracing::error!("{}", e);
                 self.status = Status::Error(e);
@@ -1349,7 +1342,7 @@ impl App {
             }
         };
 
-        match keychain::fido2::authenticate(&cred_bytes, &pin) {
+        match keychain::fido2::authenticate(&cred_bytes, &verification) {
             Ok(_) => match KeyVault::get_all_accounts(self.wallet_id) {
                 Ok(accounts) => {
                     self.accounts = accounts;
@@ -1399,11 +1392,8 @@ impl App {
             }
         };
 
-        let pin = match qpv2_core::pinentry::prompt_password(
-            "Enter your FIDO2 security key PIN to register a new credential.",
-            "PIN:",
-        ) {
-            Ok(s) => s,
+        let verification = match fido2_verification("register a new credential") {
+            Ok(v) => v,
             Err(e) => {
                 tracing::error!("{}", e);
                 self.status = Status::Error(e);
@@ -1411,7 +1401,7 @@ impl App {
             }
         };
 
-        let credential = match keychain::fido2::register(&pin) {
+        let credential = match keychain::fido2::register(&verification, &wallet_name) {
             Ok(c) => c,
             Err(e) => {
                 let msg = format!("FIDO2 registration failed: {}", e);
@@ -1423,15 +1413,16 @@ impl App {
 
         let credential_id = hex::encode(&credential.credential_id);
 
-        let hmac_output = match keychain::fido2::authenticate(&credential.credential_id, &pin) {
-            Ok(h) => h,
-            Err(e) => {
-                let msg = format!("FIDO2 authentication failed: {}", e);
-                tracing::error!("{}", msg);
-                self.status = Status::Error(msg);
-                return;
-            }
-        };
+        let hmac_output =
+            match keychain::fido2::authenticate(&credential.credential_id, &verification) {
+                Ok(h) => h,
+                Err(e) => {
+                    let msg = format!("FIDO2 authentication failed: {}", e);
+                    tracing::error!("{}", msg);
+                    self.status = Status::Error(msg);
+                    return;
+                }
+            };
 
         let key = match qpv2_core::utilities::derive_vault_enc_key(&hmac_output) {
             Ok(k) => k,
@@ -1481,6 +1472,20 @@ impl App {
 }
 
 // ── Last-wallet persistence ──
+
+/// Asks the connected security key how it verifies its user, and prompts for
+/// the key's PIN only when the key wants one from this host. A key that
+/// verifies on itself (a Trezor, a fingerprint key) gets no dialog.
+fn fido2_verification(purpose: &str) -> Result<keychain::fido2::Verification, String> {
+    if !keychain::fido2::needs_host_pin()? {
+        return Ok(keychain::fido2::Verification::OnDevice);
+    }
+    let pin = qpv2_core::pinentry::prompt_password(
+        &format!("Enter your FIDO2 security key PIN to {}.", purpose),
+        "PIN:",
+    )?;
+    Ok(keychain::fido2::Verification::OnHost(pin))
+}
 
 const LAST_WALLET_FILE: &str = "last_wallet.json";
 

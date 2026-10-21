@@ -16,7 +16,7 @@
 
 ## FIDO2
 
-- [ ] **Support built-in user verification (UV) for FIDO2 devices.** Devices with on-board biometrics (YubiKey Bio fingerprint) or on-device PIN entry (keypads/buttons) handle user verification internally — no host-side PIN is needed. Detect device UV capability at registration/assertion time and skip the PIN prompt when the device supports internal UV. Currently only the clientPin path is implemented (PIN entered on host, sent encrypted to device).
+- [x] **Support built-in user verification (UV) for FIDO2 devices.** Done: `keychain::fido2::needs_host_pin` reads the key's capability list before any prompt, and `register` / `authenticate` take a `Verification` — `OnHost` for keys with no input of their own (YubiKey 5), `OnDevice` for keys that verify on themselves (Trezor Safe, fingerprint keys, keypads), which get the `uv` option and no host PIN. A key offering both (a fingerprint key with a PIN fallback) gets the host PIN: CTAP 2.1 deprecates the plain `uv` request in favour of a token flow the library lacks, and the PIN path is the one proven to work; on-device is used only where it is the key's sole method. The key's own `user_verified` flag is checked on every assertion before the hmac-secret output is accepted. Prompted by a Trezor Safe 7 rejecting the host-PIN step with `CTAP2_ERR_UNSUPPORTED_OPTION`; its firmware only serves the key-agreement piece of client PIN that hmac-secret needs (`core/src/apps/webauthn/fido2.py`). **Not yet verified on hardware** — the Trezor `uv` registration and a stable hmac-secret across unlocks still need a real device.
 
 ## Trezor
 

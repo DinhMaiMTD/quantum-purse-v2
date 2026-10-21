@@ -212,7 +212,6 @@ impl App {
                         SpxVariant::Sha2256S,
                         SpxVariant::Shake256F,
                         SpxVariant::Shake256S,
-                        
                     ] {
                         let selected = self.new_wallet_variant == *variant;
                         let text = egui::RichText::new(format!("{}", variant))
