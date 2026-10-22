@@ -10,7 +10,7 @@ use qpv2_core::types::{SingleSigConvention, SpxVariant};
 use crate::types::{label_font, WalletModal};
 use crate::ui::utils::{
     device_waiting_line, ghost_button, pin_popup_above_modal, section_header, v1_import_checkbox,
-    SectionCounter, TREZOR_WAITING_TEXT,
+    SectionCounter, FIDO2_WAITING_TEXT, TREZOR_WAITING_TEXT,
 };
 use crate::App;
 
@@ -255,8 +255,10 @@ impl App {
         // Any of our Trezor operations also disables the create buttons,
         // including a reconnect or a signing for the open wallet: creating a
         // wallet switches to it and would drop that operation the same way,
-        // and a second connect would only fail as busy.
-        let device_busy = connecting || self.trezor_operation_in_flight();
+        // and a second connect would only fail as busy. A security-key request
+        // for a new account does the same, for the same reasons.
+        let device_busy =
+            connecting || self.trezor_operation_in_flight() || self.fido2_operation_in_flight();
 
         let single_sig_convention = SingleSigConvention::new(self.import_from_v1);
 
@@ -328,7 +330,7 @@ impl App {
         let waiting_on = if self.trezor_connect_rx.is_some() {
             Some(TREZOR_WAITING_TEXT)
         } else if self.fido2_connect_rx.is_some() {
-            Some("Touch your security key when it blinks, or follow its screen.")
+            Some(FIDO2_WAITING_TEXT)
         } else {
             None
         };

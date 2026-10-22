@@ -655,6 +655,62 @@ impl App {
         }
     }
 
+    /// Pick up the account read from a Trezor by `start_create_hw_wallet_account`
+    /// and store it.
+    pub(crate) fn poll_trezor_new_account(&mut self) {
+        let rx = match &self.trezor_new_account_rx {
+            Some(rx) => rx,
+            None => return,
+        };
+
+        match rx.try_recv() {
+            Ok(Ok(account)) => {
+                self.trezor_new_account_rx = None;
+                self.finish_create_hw_wallet_account(account);
+            }
+            Ok(Err(e)) => {
+                self.trezor_new_account_rx = None;
+                tracing::error!("{}", e);
+                self.status = Status::Error(e);
+            }
+            Err(mpsc::TryRecvError::Empty) => {}
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.trezor_new_account_rx = None;
+                let msg = "Trezor account import thread terminated unexpectedly.".to_string();
+                tracing::error!("{}", msg);
+                self.status = Status::Error(msg);
+            }
+        }
+    }
+
+    /// Pick up the vault key from `start_create_fido2_wallet_account`
+    /// and create the account with it.
+    pub(crate) fn poll_fido2_new_account(&mut self) {
+        let rx = match &self.fido2_new_account_rx {
+            Some(rx) => rx,
+            None => return,
+        };
+
+        match rx.try_recv() {
+            Ok(Ok(auth)) => {
+                self.fido2_new_account_rx = None;
+                self.finish_create_fido2_wallet_account(auth);
+            }
+            Ok(Err(e)) => {
+                self.fido2_new_account_rx = None;
+                tracing::error!("{}", e);
+                self.status = Status::Error(e);
+            }
+            Err(mpsc::TryRecvError::Empty) => {}
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.fido2_new_account_rx = None;
+                let msg = "FIDO2 account thread terminated unexpectedly.".to_string();
+                tracing::error!("{}", msg);
+                self.status = Status::Error(msg);
+            }
+        }
+    }
+
     /// Pick up the latest device-link probe. Runs on every screen so the
     /// telemetry segment stays truthful wherever the user is.
     pub(crate) fn poll_device_status(&mut self) {

@@ -5,8 +5,8 @@ use qpv2_core::KeyVault;
 
 use crate::tx_history::TxHistoryStore;
 use crate::types::{
-    CurrentWallet, Fido2WalletFlow, Fido2WalletSetup, Fido2WalletUpdate, Screen, Status,
-    TransactionStatus, TrezorConnectUpdate,
+    CurrentWallet, Fido2AccountCreate, Fido2WalletFlow, Fido2WalletSetup, Fido2WalletUpdate,
+    Screen, Status, TransactionStatus, TrezorAccountCreate, TrezorConnectUpdate,
 };
 use crate::App;
 
@@ -19,6 +19,9 @@ const DEVICE_PROBE_INTERVAL: std::time::Duration = std::time::Duration::from_sec
 /// Name of the worker that runs a FIDO2 wallet create or import, so the log
 /// shows which thread made each call to the key.
 const FIDO2_SETUP_THREAD: &str = "fido2-setup-thread";
+
+/// Name of the worker that asks the security key for a new account.
+const FIDO2_ACCOUNT_THREAD: &str = "fido2-account-thread";
 
 /// Where light-client registration starts scanning for new scripts.
 pub(crate) enum StartingBlock {
@@ -264,6 +267,9 @@ impl App {
         self.trezor_connect_rx = None;
         // Same for a pending FIDO2 create or import.
         self.fido2_connect_rx = None;
+        // And a pending new account: it belongs to the wallet being left.
+        self.trezor_new_account_rx = None;
+        self.fido2_new_account_rx = None;
         // Link status belongs to the wallet being left; a late probe result
         // would otherwise describe the old wallet's device.
         self.device_status_rx = None;
@@ -602,6 +608,13 @@ impl App {
                 keychain::retrieve_key(self.wallet_id, purpose).map(AuthKey::CryptoKey)
             }
             Some(AuthMethod::Fido2 { credential_id }) => {
+                // One request at a time: a second one would reach the key
+                // while it waits for the touch the first one asked for.
+                if self.fido2_operation_in_flight() {
+                    return Err("The security key is busy with another request — finish it \
+                                and try again."
+                        .to_string());
+                }
                 let cred_bytes = hex::decode(credential_id)
                     .map_err(|e| format!("Invalid credential ID: {}", e))?;
                 let verification = fido2_verification(purpose)?;
@@ -619,7 +632,14 @@ impl App {
 
     pub(crate) fn create_singlesig_account(&mut self) {
         if KeyVault::is_hardware_wallet(self.wallet_id) {
-            self.create_device_account();
+            self.start_create_hw_wallet_account();
+            return;
+        }
+        // A security key waits for a touch, so it runs on a worker; the
+        // password and Touch ID dialogs stay inline, as in wallet creation.
+        if let Some(AuthMethod::Fido2 { credential_id }) = &self.auth_method {
+            let credential_id = credential_id.clone();
+            self.start_create_fido2_wallet_account(credential_id);
             return;
         }
 
@@ -668,9 +688,49 @@ impl App {
         }
     }
 
-    /// Import the next account (index = current account count) from a connected
-    /// Trezor. Accounts are contiguous from index 0, so position equals index.
-    fn create_device_account(&mut self) {
+    /// Start creating the next account of a FIDO2 wallet. The PIN dialog and
+    /// the key's request run on a worker, as in `start_create_wallet_with_fido2`,
+    /// so the window keeps painting and the accounts panel can tell the user
+    /// to touch the key. `poll_fido2_new_account` hands the vault key to
+    /// `finish_create_fido2_wallet_account`. No-op while one is
+    /// already in flight.
+    fn start_create_fido2_wallet_account(&mut self, credential_id: String) {
+        if self.fido2_new_account_rx.is_some() {
+            return;
+        }
+        let cred_bytes = match hex::decode(&credential_id) {
+            Ok(b) => b,
+            Err(e) => {
+                let msg = format!("Invalid credential ID: {}", e);
+                tracing::error!("{}", msg);
+                self.status = Status::Error(msg);
+                return;
+            }
+        };
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.fido2_new_account_rx = Some(rx);
+
+        let worker = std::thread::Builder::new().name(FIDO2_ACCOUNT_THREAD.to_string());
+        let spawned = worker.spawn(move || {
+            let result = (|| -> Fido2AccountCreate {
+                let verification = fido2_verification("create a new account")?;
+                let hmac_output = keychain::fido2::authenticate(&cred_bytes, &verification)?;
+                qpv2_core::utilities::derive_vault_enc_key(&hmac_output)
+                    .map(AuthKey::CryptoKey)
+                    .map_err(|e| format!("Key derivation failed: {}", e))
+            })();
+            let _ = tx.send(result);
+        });
+        // The failed spawn drops the sender, so the poller reports the end.
+        if let Err(e) = spawned {
+            tracing::error!("Failed to start the FIDO2 account thread: {}", e);
+        }
+    }
+
+    /// Derive and store the account `start_create_fido2_wallet_account`
+    /// got the vault key for. Called by `poll_fido2_new_account` on the UI thread.
+    pub(crate) fn finish_create_fido2_wallet_account(&mut self, auth: AuthKey) {
         let variant = match KeyVault::get_spx_variant(self.wallet_id) {
             Ok(v) => v,
             Err(e) => {
@@ -680,40 +740,123 @@ impl App {
                 return;
             }
         };
-        let next_index = self.accounts.len() as u32;
+        let vault = KeyVault::new(variant, self.wallet_id);
+        match vault.gen_singlesig_account(auth) {
+            Ok(account) => {
+                tracing::info!(
+                    "Account created (wallet_id={}, lock_args={}...)",
+                    self.wallet_id,
+                    &account.lock_args[..8.min(account.lock_args.len())]
+                );
+                self.balances.insert(account.lock_args.clone(), Some(0));
+                self.spendable_balances
+                    .insert(account.lock_args.clone(), Some(0));
+                self.register_lock_scripts_with_light_client(
+                    std::slice::from_ref(&account.lock_args),
+                    StartingBlock::Tip,
+                );
+                self.accounts.push(account);
+                self.refresh_wallet_cache();
+                self.status = Status::Info("New account created!".to_string());
+            }
+            Err(e) => {
+                let msg = format!("Failed to create account: {}", e);
+                tracing::error!("{}", msg);
+                self.status = Status::Error(msg);
+            }
+        }
+    }
+
+    /// Start importing the next account from a connected Trezor. Runs on a
+    /// worker, as in `start_create_trezor_watch_only_wallet`: a locked device
+    /// holds the connect open until its PIN is typed, and the address needs an
+    /// on-device confirmation after that. `poll_trezor_new_account` hands the
+    /// account to `finish_create_hw_wallet_account`. No-op while one is already
+    /// in flight.
+    ///
+    /// Single-sig accounts are numbered from 0 with no gaps, so the next index
+    /// is their count. Multisig accounts are stored apart and don't count.
+    fn start_create_hw_wallet_account(&mut self) {
+        if self.trezor_new_account_rx.is_some() {
+            return;
+        }
+        let variant = match KeyVault::get_spx_variant(self.wallet_id) {
+            Ok(v) => v,
+            Err(e) => {
+                let msg = format!("Failed to read wallet variant: {}", e);
+                tracing::error!("{}", msg);
+                self.status = Status::Error(msg);
+                return;
+            }
+        };
+        let next_index = match KeyVault::get_singlesig_lock_args(self.wallet_id) {
+            Ok(existing) => existing.len() as u32,
+            Err(e) => {
+                let msg = format!("Failed to read the wallet's accounts: {}", e);
+                tracing::error!("{}", msg);
+                self.status = Status::Error(msg);
+                return;
+            }
+        };
         let is_mainnet = self.qp_client.is_mainnet();
 
-        let mut device = match trezor_connect::open(&mut trezor_connect::PinentryPairing) {
-            Ok(d) => d,
-            Err(e) => {
-                let msg = format!("Could not connect to Trezor: {}", e);
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.trezor_new_account_rx = Some(rx);
+
+        std::thread::spawn(move || {
+            let result = (|| -> TrezorAccountCreate {
+                let mut device = trezor_connect::open(&mut trezor_connect::PinentryPairing)
+                    .map_err(|e| format!("Could not connect to Trezor: {}", e))?;
+                let addr = device
+                    .get_address(next_index, variant, is_mainnet, true)
+                    .map_err(|e| {
+                        format!("Failed to import account {} from Trezor: {}", next_index, e)
+                    })?;
+                let config = qpv2_core::types::MultisigConfig::single_sig(
+                    variant,
+                    addr.pubkey,
+                    trezor_connect::TREZOR_CONVENTION,
+                );
+                Ok(qpv2_core::types::SphincsPlusAccount {
+                    index: next_index,
+                    lock_args: hex::encode(&addr.lock_args),
+                    config,
+                    initiating_signer_lock_args: None,
+                })
+            })();
+            let _ = tx.send(result);
+        });
+    }
+
+    /// Store the account `start_create_hw_wallet_account` read from the Trezor.
+    /// Called by `poll_trezor_new_account` on the UI thread.
+    pub(crate) fn finish_create_hw_wallet_account(
+        &mut self,
+        account: qpv2_core::types::SphincsPlusAccount,
+    ) {
+        // The store numbers the account by the single-sig count when it
+        // writes, silently. That count must still be the index the device
+        // derived the account at, or signing would ask for a different key.
+        match KeyVault::get_singlesig_lock_args(self.wallet_id) {
+            Ok(existing) if existing.len() as u32 == account.index => {}
+            Ok(existing) => {
+                let msg = format!(
+                    "The wallet's accounts changed while the Trezor was confirming account {} \
+                     (the next account is now {}). Try again.",
+                    account.index,
+                    existing.len()
+                );
                 tracing::error!("{}", msg);
                 self.status = Status::Error(msg);
                 return;
             }
-        };
-
-        let addr = match device.get_address(next_index, variant, is_mainnet, true) {
-            Ok(a) => a,
             Err(e) => {
-                let msg = format!("Failed to import account {} from Trezor: {}", next_index, e);
+                let msg = format!("Failed to read the wallet's accounts: {}", e);
                 tracing::error!("{}", msg);
                 self.status = Status::Error(msg);
                 return;
             }
-        };
-
-        let config = qpv2_core::types::MultisigConfig::single_sig(
-            variant,
-            addr.pubkey,
-            trezor_connect::TREZOR_CONVENTION,
-        );
-        let account = qpv2_core::types::SphincsPlusAccount {
-            index: next_index,
-            lock_args: hex::encode(&addr.lock_args),
-            config,
-            initiating_signer_lock_args: None,
-        };
+        }
 
         if let Err(e) = qpv2_core::db::add_singlesig_account(self.wallet_id, account.clone()) {
             let msg = format!("Failed to store account: {}", e);
@@ -994,6 +1137,7 @@ impl App {
     pub(crate) fn trezor_operation_in_flight(&self) -> bool {
         self.trezor_connect_rx.is_some()
             || self.trezor_reconnect_rx.is_some()
+            || self.trezor_new_account_rx.is_some()
             // Signing shares its channel with the other auth methods, so it
             // only implies device work on a device-backed wallet.
             || (matches!(self.auth_method, Some(AuthMethod::Trezor { .. }))
@@ -1005,6 +1149,14 @@ impl App {
     /// locked meanwhile.
     pub(crate) fn external_wallet_setup_in_flight(&self) -> bool {
         self.trezor_connect_rx.is_some() || self.fido2_connect_rx.is_some()
+    }
+
+    /// True while one of our requests waits on a security key: a wallet create
+    /// or import, or a new account. The security-key counterpart of
+    /// `trezor_operation_in_flight`, minus signing, which still holds the UI
+    /// thread until the key answers.
+    pub(crate) fn fido2_operation_in_flight(&self) -> bool {
+        self.fido2_connect_rx.is_some() || self.fido2_new_account_rx.is_some()
     }
 
     /// Refresh the Trezor link status if the cadence is due.

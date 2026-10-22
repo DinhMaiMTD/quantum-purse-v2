@@ -312,6 +312,15 @@ pub(crate) enum Fido2WalletFlow {
 
 pub(crate) type Fido2WalletUpdate = Result<Fido2WalletFlow, String>;
 
+/// Result of a background Trezor account import: the next account, read from
+/// the device, for the UI thread to store.
+pub(crate) type TrezorAccountCreate = Result<qpv2_core::types::SphincsPlusAccount, String>;
+
+/// Result of the security-key step of a background new account: the vault key
+/// derived from the key's hmac-secret output, for the UI thread to derive and
+/// store the account with.
+pub(crate) type Fido2AccountCreate = Result<qpv2_core::types::AuthKey, String>;
+
 /// Application state machine.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Screen {

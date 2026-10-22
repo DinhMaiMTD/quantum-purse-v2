@@ -4,8 +4,9 @@ use eframe::egui;
 use qpv2_core::KeyVault;
 
 use super::utils::{
-    accent_button, auth_badge_label, badge, ckb_split, ghost_button, panel_frame, row_hover,
-    section_header, truncate_middle,
+    accent_button, auth_badge_label, badge, ckb_split, device_waiting_line, ghost_button,
+    panel_frame, row_hover, section_header, truncate_middle, FIDO2_WAITING_TEXT,
+    TREZOR_WAITING_TEXT,
 };
 use crate::types::{display_font, label_font, AppColors, Status};
 use crate::App;
@@ -115,6 +116,17 @@ impl App {
                     .ok()
                     .map(|info| auth_badge_label(&info.auth_method));
 
+                // A Trezor or security-key request for the next account waits
+                // on the device. One at a time, so two can't claim the same
+                // account number.
+                let waiting_on = if self.trezor_new_account_rx.is_some() {
+                    Some(TREZOR_WAITING_TEXT)
+                } else if self.fido2_new_account_rx.is_some() {
+                    Some(FIDO2_WAITING_TEXT)
+                } else {
+                    None
+                };
+
                 panel_frame(&self.colors).show(ui, |ui| {
                     ui.set_width(ui.available_width());
 
@@ -135,10 +147,14 @@ impl App {
                         );
                         let btn =
                             accent_button(&self.colors, "NEW ACCOUNT", egui::vec2(btn_w, 24.0));
-                        if ui.add(btn).clicked() {
+                        if ui.add_enabled(waiting_on.is_none(), btn).clicked() {
                             self.create_singlesig_account();
                         }
                     });
+                    if let Some(text) = waiting_on {
+                        ui.add_space(8.0);
+                        device_waiting_line(ui, &self.colors, text);
+                    }
                     ui.add_space(10.0);
 
                     if rows.is_empty() {
