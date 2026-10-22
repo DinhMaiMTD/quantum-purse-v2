@@ -308,6 +308,26 @@ impl App {
         tracing::info!("Wallet locked (wallet_id={})", self.wallet_id);
     }
 
+    /// Cover the open wallet. Nothing is cleared: balances, history and any
+    /// work in flight (a Trezor signature, a broadcast) stay, so showing it
+    /// again is instant and loses nothing. Popups close so none draws over
+    /// the cover, and the status line clears so it reveals nothing.
+    pub(crate) fn hide_wallet(&mut self) {
+        self.wallet_selector_open = false;
+        self.node_selector_open = false;
+        self.device_popup_open = false;
+        self.screen = Screen::Locked;
+        self.status = Status::None;
+        tracing::info!("Wallet hidden (wallet_id={})", self.wallet_id);
+    }
+
+    /// Uncover the wallet: the one `hide_wallet` covered, or the one the app
+    /// started on, whose accounts and first fetch were loaded behind the cover.
+    pub(crate) fn show_wallet(&mut self) {
+        self.screen = Screen::Unlocked;
+        tracing::info!("Wallet shown (wallet_id={})", self.wallet_id);
+    }
+
     /// Trim the wallet name, check it is free, and claim the next wallet ID.
     /// Called before any prompt, so a duplicate name fails early.
     pub(crate) fn prepare_new_wallet(&self) -> Result<(u32, String), String> {
@@ -1076,39 +1096,6 @@ impl App {
         );
     }
 
-    /// Unlock via the platform credential store, then transition to
-    /// Unlocked.
-    pub(crate) fn unlock_with_keychain(&mut self) {
-        match keychain::retrieve_key(self.wallet_id, "unlock this wallet") {
-            Ok(_) => match KeyVault::get_all_accounts(self.wallet_id) {
-                Ok(accounts) => {
-                    self.accounts = accounts;
-                    self.screen = Screen::Unlocked;
-                    self.status = Status::None;
-                    self.last_poll_time = std::time::Instant::now();
-                    self.load_tx_history_from_disk();
-                    self.fetch_all_balances();
-                    self.fetch_tx_history(true);
-                    self.fetch_dao_cells();
-                    self.fetch_node_status();
-                    tracing::info!(
-                        "Wallet unlocked via keychain (wallet_id={})",
-                        self.wallet_id
-                    );
-                }
-                Err(e) => {
-                    let msg = format!("Failed to unlock: {}", e);
-                    tracing::error!("{}", msg);
-                    self.status = Status::Error(msg);
-                }
-            },
-            Err(e) => {
-                tracing::error!("{}", e);
-                self.status = Status::Error(e);
-            }
-        }
-    }
-
     /// Create a multisig account from the modal form state.
     pub(crate) fn create_multisig_account(&mut self) {
         let singlesig: Vec<_> = self
@@ -1356,54 +1343,6 @@ impl App {
             wallet_name,
             StartingBlock::Tip,
         );
-    }
-
-    /// Unlock via FIDO2 hmac-secret, then transition to Unlocked.
-    pub(crate) fn unlock_with_fido2(&mut self, credential_id: &str) {
-        let cred_bytes = match hex::decode(credential_id) {
-            Ok(b) => b,
-            Err(e) => {
-                let msg = format!("Invalid credential ID: {}", e);
-                tracing::error!("{}", msg);
-                self.status = Status::Error(msg);
-                return;
-            }
-        };
-
-        let verification = match fido2_verification("unlock") {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::error!("{}", e);
-                self.status = Status::Error(e);
-                return;
-            }
-        };
-
-        match keychain::fido2::authenticate(&cred_bytes, &verification) {
-            Ok(_) => match KeyVault::get_all_accounts(self.wallet_id) {
-                Ok(accounts) => {
-                    self.accounts = accounts;
-                    self.screen = Screen::Unlocked;
-                    self.status = Status::None;
-                    self.last_poll_time = std::time::Instant::now();
-                    self.load_tx_history_from_disk();
-                    self.fetch_all_balances();
-                    self.fetch_tx_history(true);
-                    self.fetch_dao_cells();
-                    self.fetch_node_status();
-                    tracing::info!("Wallet unlocked via FIDO2 (wallet_id={})", self.wallet_id);
-                }
-                Err(e) => {
-                    let msg = format!("Failed to unlock: {}", e);
-                    tracing::error!("{}", msg);
-                    self.status = Status::Error(msg);
-                }
-            },
-            Err(e) => {
-                tracing::error!("{}", e);
-                self.status = Status::Error(e);
-            }
-        }
     }
 
     /// Import a seed phrase into a FIDO2-authenticated wallet: asks for the

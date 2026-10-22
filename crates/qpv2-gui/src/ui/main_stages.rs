@@ -1,15 +1,16 @@
 //! App chrome (telemetry strip, module rail, status line) and the
-//! Setup / Locked terminal screens.
+//! Setup and cover screens.
 
-use crate::types::{display_font, label_font, Status, Tab};
+use crate::types::{label_font, Status, Tab};
+use crate::ui::cover::{draw_cover_mark, restart_cover};
 use crate::ui::utils::{
-    accent_button, blinking_cursor, breathing_dot, ghost_button, panel_frame, value_flash,
+    blinking_cursor, breathing_dot, draw_qp_logo_chip, ghost_button, hold_button, panel_frame,
+    value_flash,
 };
 use crate::ui::wallet_modal::WALLET_FORM_W;
 use crate::App;
 use ckb_node::NodeType;
 use eframe::egui;
-use qpv2_core::types::AuthMethod;
 
 /// Height of the top telemetry strip.
 const TELEMETRY_H: f32 = 38.0;
@@ -22,6 +23,9 @@ const RAIL_W: f32 = 138.0;
 /// target — but the wallet's sits in a right-to-left layout with nothing to its
 /// right to paint into, so it has to reserve this width to hold its place.
 const ARROW_W: f32 = 12.0;
+/// How long HOLD TO SHOW must be held. Short: the wallet is shown often, and
+/// the hold only guards against showing it by accident.
+const SHOW_HOLD_SECS: f64 = 1.0;
 
 impl App {
     // ────────────────────────────────────────────────────────────────
@@ -326,18 +330,13 @@ impl App {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.add_space(12.0);
 
-            // Password is the only method without lock/unlock, deliberately
-            // (see the startup gate in `main.rs`): its passwords are 20+
-            // characters, too much friction to re-enter just to look at
-            // balances. Every other method locks — stated as an exclusion,
-            // like the startup gate, so a new method gets a lock by default.
-            if !matches!(self.auth_method, Some(AuthMethod::Password)) {
-                let lock = ghost_button(&self.colors, "LOCK", egui::vec2(56.0, 22.0));
-                if ui.add(lock).clicked() {
-                    self.lock_wallet();
-                }
-                ui.add_space(10.0);
+            // Every wallet type can be hidden behind the cover; see
+            // `show_locked` for why showing it again needs only a hold.
+            let hide = ghost_button(&self.colors, "LOCK", egui::vec2(56.0, 22.0));
+            if ui.add(hide).clicked() {
+                self.hide_wallet();
             }
+            ui.add_space(10.0);
 
             let wallet_text = self.wallet_name.to_uppercase();
             // Dropdown arrow, mirroring the node selector's. RTL
@@ -694,11 +693,14 @@ impl App {
     }
 
     // ────────────────────────────────────────────────────────────────
-    // Locked — secure terminal login
+    // Hidden — the cover over the open wallet
     // ────────────────────────────────────────────────────────────────
 
+    /// The cover: the qp∞ mark assembling out of dust, the wallet's name, and
+    /// a hold to show it. Privacy, not security: every action that spends or
+    /// reveals a secret asks for authentication on its own, so the hold only
+    /// guards against showing the wallet by accident.
     pub(crate) fn show_locked(&mut self, ui: &mut egui::Ui) {
-        let t = ui.input(|i| i.time) as f32;
         let panel_w = 520.0;
 
         let variant = self
@@ -709,7 +711,9 @@ impl App {
             .unwrap_or_else(|| "SPHINCS+".to_string());
 
         ui.vertical_centered(|ui| {
-            ui.add_space(90.0);
+            ui.add_space(40.0);
+            draw_cover_mark(ui, &self.colors);
+            ui.add_space(6.0);
 
             ui.label(
                 egui::RichText::new("POST QUANTUM HARDENED, POWERED BY CKB")
@@ -731,7 +735,7 @@ impl App {
                             &format!(
                                 "> WALLET ......... {}\n\
                                  > SCHEME ......... {}\n\
-                                 > STATUS ......... SEALED",
+                                 > STATUS ......... HIDDEN",
                                 self.wallet_name.to_uppercase(),
                                 variant,
                             ),
@@ -742,69 +746,17 @@ impl App {
 
                         ui.add_space(18.0);
 
-                        // The prompt: > AUTHENTICATE ▮
-                        ui.horizontal(|ui| {
-                            ui.label(
-                                egui::RichText::new("> AUTHENTICATE")
-                                    .font(display_font(22.0))
-                                    .color(self.colors.accent),
-                            );
-                            let (r, _) = ui
-                                .allocate_exact_size(egui::vec2(16.0, 24.0), egui::Sense::hover());
-                            blinking_cursor(
-                                ui.painter(),
-                                egui::pos2(r.left() + 4.0, r.center().y + 1.0),
-                                18.0,
-                                self.colors.accent,
-                                t,
-                            );
-                            ui.ctx()
-                                .request_repaint_after(std::time::Duration::from_millis(120));
-                        });
-
-                        ui.add_space(18.0);
-
-                        let full_w = panel_w - 30.0;
-                        match &self.auth_method {
-                            Some(AuthMethod::Fido2 { credential_id }) => {
-                                let cred_id = credential_id.clone();
-                                let btn = accent_button(
-                                    &self.colors,
-                                    "Unlock // FIDO2",
-                                    egui::vec2(full_w, 42.0),
-                                );
-                                if ui.add(btn).clicked() {
-                                    self.unlock_with_fido2(&cred_id);
-                                }
-                            }
-                            Some(AuthMethod::Keychain) => {
-                                let label = format!("Unlock // {}", keychain::short_name());
-                                let btn =
-                                    accent_button(&self.colors, &label, egui::vec2(full_w, 42.0));
-                                if ui.add(btn).clicked() {
-                                    self.unlock_with_keychain();
-                                }
-                            }
-                            Some(AuthMethod::Trezor { .. }) => {
-                                let btn = accent_button(
-                                    &self.colors,
-                                    "Open // Watch-only",
-                                    egui::vec2(full_w, 42.0),
-                                );
-                                if ui.add(btn).clicked() {
-                                    let id = self.wallet_id;
-                                    let name = self.wallet_name.clone();
-                                    self.switch_wallet(id, &name);
-                                }
-                            }
-                            // Unreachable: Password skips the startup gate and
-                            // has no LOCK button, and `list_wallets` drops any
-                            // wallet whose info cannot be read, so `auth_method`
-                            // is `Some` for anything that gets this far. Listed
-                            // explicitly rather than `_` so that adding an auth
-                            // method fails to compile here instead of silently
-                            // rendering a screen with nothing to click.
-                            Some(AuthMethod::Password) | None => {}
+                        if hold_button(
+                            ui,
+                            egui::Id::new("cover-hold-to-show"),
+                            "HOLD TO UNLOCK",
+                            self.colors.accent,
+                            egui::vec2(panel_w - 30.0, 42.0),
+                            SHOW_HOLD_SECS,
+                            "Hold for a second to show the wallet",
+                        ) {
+                            restart_cover(ui.ctx());
+                            self.show_wallet();
                         }
                     });
                 },
@@ -841,91 +793,6 @@ fn boot_lines(
     let (rect, _) = ui.allocate_exact_size(full.size(), egui::Sense::hover());
     ui.painter()
         .text(rect.left_top(), egui::Align2::LEFT_TOP, typed, font, color);
-}
-
-/// The Quantum Purse logo
-fn draw_qp_logo(
-    painter: &egui::Painter,
-    rect: egui::Rect,
-    mark: egui::Color32,
-    chip: egui::Color32,
-) {
-    use std::f32::consts::{FRAC_1_SQRT_2, SQRT_2};
-
-    // Placement matches icon.svg: 60-unit strokes on its 848-unit tile, with
-    // the crossing at y = 470.64 so the mark's bounding box is centred.
-    let s = rect.width().min(rect.height());
-    let unit = s * 60.0 / 848.0;
-    let centre = rect.left_top() + egui::vec2(0.5 * s, (470.64 - 88.0) / 848.0 * s);
-    let p = |x: f32, y: f32| centre + egui::vec2(x, y) * unit;
-    let stroke = egui::Stroke::new(unit, mark);
-    // Clockwise quads. Stems are polygons rather than rects so egui does not
-    // snap their edges to whole pixels and shift them against the rings.
-    let quad = |corners: [(f32, f32); 4], color: egui::Color32| {
-        painter.add(egui::Shape::convex_polygon(
-            corners.map(|(x, y)| p(x, y)).to_vec(),
-            color,
-            egui::Stroke::NONE,
-        ));
-    };
-
-    // Infinity: two 270° rings centred at x = ±3, joined by the diagonals of
-    // a 3×3 square, which touch both rings tangentially. One closed path:
-    // the left ring, the "/" diagonal, the right ring, then back along "\".
-    // Angles are in screen space (y down): the left ring runs from its
-    // upper-right touch point round the left to its lower-right one.
-    let radius = 1.5 * SQRT_2;
-    let mut path = Vec::with_capacity(66);
-    for (cx, from, to) in [(-3.0, -45.0_f32, -315.0_f32), (3.0, -135.0, 135.0)] {
-        for i in 0..=32 {
-            let a = (from + (to - from) * i as f32 / 32.0).to_radians();
-            path.push(p(cx + radius * a.cos(), radius * a.sin()));
-        }
-    }
-    painter.add(egui::Shape::closed_line(path, stroke));
-
-    // q and p stems, from the ring tops down past the rings. Each is split
-    // at the crossing, and both halves end hidden inside a diagonal. The gap
-    // between them is 0.39 stroke widths, kept to at least one physical
-    // pixel so the stems stay apart on the 22px chip on a 1x screen.
-    let g = (0.39 * unit).max(1.0 / painter.pixels_per_point()) / unit;
-    let (inner, outer) = (g / 2.0, g / 2.0 + 1.0);
-    let (top, split, bottom) = (-(radius + 0.5), g / 2.0 + 0.5, 4.0);
-    for (l, r) in [(-outer, -inner), (inner, outer)] {
-        quad([(l, top), (r, top), (r, -split), (l, -split)], mark);
-        quad([(l, split), (r, split), (r, bottom), (l, bottom)], mark);
-    }
-
-    // Weave: cut a gap beside the "\" diagonal, `g` wide measured
-    // horizontally like the stem gap, through what passes under it (the "/"
-    // diagonal, the upper p stem and the lower q stem), then redraw "\" so
-    // its edges stay crisp. The gap below "\" is the one above it turned
-    // half a turn about the crossing.
-    let h = FRAC_1_SQRT_2;
-    let above = [
-        (0.0, -h - g),
-        (outer, outer - h - g),
-        (outer, outer - h),
-        (0.0, -h),
-    ];
-    quad(above, chip);
-    quad(above.map(|(x, y)| (-x, -y)), chip);
-    painter.line_segment([p(-1.5, -1.5), p(1.5, 1.5)], stroke);
-}
-
-/// The app chip: solid accent rounded square with the qp∞ mark knocked
-/// out in the canvas color, mirroring `assets/icon/icon.svg`. The icon's
-/// gradient fill is rendered as a flat accent here — egui has no gradient
-/// fill primitive and the difference is imperceptible at chip size.
-fn draw_qp_logo_chip(
-    painter: &egui::Painter,
-    rect: egui::Rect,
-    chip: egui::Color32,
-    mark: egui::Color32,
-) {
-    let s = rect.width().min(rect.height());
-    painter.rect_filled(rect, s * 0.222, chip);
-    draw_qp_logo(painter, rect, mark, chip);
 }
 
 /// Reveal `text` progressively at `cps` characters per second from the

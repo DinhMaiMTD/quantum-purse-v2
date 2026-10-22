@@ -8,7 +8,8 @@ use qpv2_core::KeyVault;
 use super::accounts::{header_cell, table_rule};
 use super::utils::truncate_middle;
 use super::utils::{
-    auth_badge_label, badge, breathing_dot, ghost_button, panel_frame, row_hover, section_header,
+    auth_badge_label, badge, breathing_dot, ghost_button, hold_button, panel_frame, row_hover,
+    section_header,
 };
 use crate::types::{display_font, label_font, Status};
 use crate::App;
@@ -398,77 +399,17 @@ impl App {
         wallet_id: u32,
         delete_target: &mut Option<u32>,
     ) {
-        let c = self.colors.danger;
-        let btn = egui::Button::new(
-            egui::RichText::new("DELETE")
-                .font(label_font(11.0))
-                .color(c),
-        )
-        .fill(egui::Color32::TRANSPARENT)
-        .stroke(egui::Stroke::new(
-            1.0,
-            egui::Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), 90),
-        ))
-        .corner_radius(0.0)
-        .min_size(egui::vec2(64.0, 20.0));
-
         let del_id = ui.id().with(("wallet-del-hold", wallet_id));
-        let press_start: Option<f64> = ui.ctx().memory(|m| m.data.get_temp(del_id));
-        let resp = ui.add(btn).on_hover_text("Hold to delete");
-
-        // Once a hold fires, that physical press is spent: after the
-        // deleted row disappears, the next row shifts under the still-
-        // held pointer and would otherwise start charging immediately —
-        // cascading into the wrong wallet. Latched until release.
-        let consumed_id = egui::Id::new("wallet-del-press-consumed");
-        let consumed: bool = ui
-            .ctx()
-            .memory(|m| m.data.get_temp(consumed_id).unwrap_or(false));
-        let pointer_down = ui.input(|i| i.pointer.primary_down());
-        if consumed && !pointer_down {
-            ui.ctx().memory_mut(|m| m.data.remove::<bool>(consumed_id));
-        }
-
-        // Read the pointer directly instead of is_pointer_button_down_on():
-        // egui drops that flag once a press outlives its max click
-        // duration (~0.8s), which silently cancelled the 2s hold. The
-        // press must start on the button AND stay over it — dragging
-        // off cancels, like a regular button.
-        let held = !consumed
-            && pointer_down
-            && ui.input(|i| {
-                i.pointer
-                    .press_origin()
-                    .is_some_and(|p| resp.rect.contains(p))
-                    && i.pointer
-                        .latest_pos()
-                        .is_some_and(|p| resp.rect.contains(p))
-            });
-
-        if held {
-            let now = ui.input(|i| i.time);
-            if press_start.is_none() {
-                ui.ctx().memory_mut(|m| m.data.insert_temp(del_id, now));
-            }
-            let start = press_start.unwrap_or(now);
-            let progress = ((now - start) / HOLD_SECS).clamp(0.0, 1.0) as f32;
-            let r = resp.rect;
-            ui.painter().rect_filled(
-                egui::Rect::from_min_size(r.min, egui::vec2(r.width() * progress, r.height())),
-                0.0,
-                egui::Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), 60),
-            );
-            if progress >= 1.0 {
-                *delete_target = Some(wallet_id);
-                ui.ctx().memory_mut(|m| {
-                    m.data.remove::<f64>(del_id);
-                    m.data.insert_temp(consumed_id, true);
-                });
-            }
-            ui.ctx().request_repaint();
-        } else if press_start.is_some() {
-            // Released early: disarm so the next press starts from zero.
-            ui.ctx().memory_mut(|m| m.data.remove::<f64>(del_id));
+        if hold_button(
+            ui,
+            del_id,
+            "DELETE",
+            self.colors.danger,
+            egui::vec2(64.0, 20.0),
+            HOLD_SECS,
+            "Hold to delete",
+        ) {
+            *delete_target = Some(wallet_id);
         }
     }
 }

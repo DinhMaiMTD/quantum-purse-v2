@@ -317,7 +317,7 @@ pub(crate) type Fido2WalletUpdate = Result<Fido2WalletFlow, String>;
 pub(crate) enum Screen {
     /// No wallet exists yet — user chooses variant and creates one.
     Setup,
-    /// Wallet exists — waiting for Touch ID to unlock.
+    /// Wallet open but hidden behind the cover; a hold shows it.
     Locked,
     /// Wallet unlocked — show wallet info.
     Unlocked,

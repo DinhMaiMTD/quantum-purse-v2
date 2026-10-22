@@ -393,18 +393,11 @@ impl App {
                 save_last_wallet_id(wid);
 
                 let am = KeyVault::read_wallet_info(wid).ok().map(|w| w.auth_method);
-                // Password is the only method with no lock/unlock UX: its
-                // passwords are 20+ characters, too much friction to demand
-                // just to see balances, and every operation prompts anyway.
-                // Every other method opens through the Locked screen, which
-                // renders the unlock action it needs — a keychain/FIDO2 prompt,
-                // or a plain open for watch-only Trezor wallets.
-                if matches!(am, Some(qpv2_core::types::AuthMethod::Password)) {
-                    let accs = KeyVault::get_all_accounts(wid).unwrap_or_default();
-                    (Screen::Unlocked, wid, wname, am, accs, true)
-                } else {
-                    (Screen::Locked, wid, wname, am, Vec::new(), false)
-                }
+                // Every wallet type starts behind the cover (see
+                // `show_locked`), with its accounts loaded and the first
+                // fetch running behind it, so showing it is instant.
+                let accs = KeyVault::get_all_accounts(wid).unwrap_or_default();
+                (Screen::Locked, wid, wname, am, accs, true)
             };
 
         // Restore the last-known node configuration (network + backend +
@@ -574,10 +567,9 @@ impl App {
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
-        // First-frame setup for password-mode wallets that App::new
-        // dropped straight into Screen::Unlocked. Mirrors what
-        // `unlock_with_keychain` does for Touch ID wallets after a
-        // successful unlock.
+        // First fetch for a wallet just opened: the one App::new starts on,
+        // behind the cover, or one switched to. Runs on any screen, so the
+        // data is ready by the time the cover is lifted.
         if self.needs_initial_fetch {
             self.needs_initial_fetch = false;
             self.last_poll_time = std::time::Instant::now();
@@ -749,8 +741,8 @@ fn main() -> eframe::Result {
 
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1100.0, 640.0])
-            .with_min_inner_size([1100.0, 640.0])
+            .with_inner_size([1100.0, 680.0])
+            .with_min_inner_size([1100.0, 680.0])
             .with_title("Quantum Purse")
             // Wayland resolves the launcher icon by matching this to the
             // installed .desktop file; keep it equal to the bundle id and

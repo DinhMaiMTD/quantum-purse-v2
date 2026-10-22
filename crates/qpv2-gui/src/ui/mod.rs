@@ -2,6 +2,7 @@
 
 mod accounts;
 mod cosigner;
+mod cover;
 mod dao;
 mod dashboard;
 mod hw_dropdown;

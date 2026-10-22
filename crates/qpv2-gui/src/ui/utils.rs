@@ -563,6 +563,94 @@ pub(crate) fn badge(ui: &mut egui::Ui, text: &str, color: egui::Color32) {
         });
 }
 
+/// Ghost button in `color` that fires only after being held for
+/// `hold_secs`; a flat progress fill sweeps across while held, so the
+/// gesture is visible at all times. Returns true on the frame the hold
+/// completes. `id` keys the press timer and must be unique per button.
+pub(crate) fn hold_button(
+    ui: &mut egui::Ui,
+    id: egui::Id,
+    label: &str,
+    color: egui::Color32,
+    size: egui::Vec2,
+    hold_secs: f64,
+    hover: &str,
+) -> bool {
+    let btn = egui::Button::new(
+        egui::RichText::new(label)
+            .font(label_font(11.0))
+            .color(color),
+    )
+    .fill(egui::Color32::TRANSPARENT)
+    .stroke(egui::Stroke::new(
+        1.0,
+        egui::Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 90),
+    ))
+    .corner_radius(0.0)
+    .min_size(size);
+
+    let press_start: Option<f64> = ui.ctx().memory(|m| m.data.get_temp(id));
+    let resp = ui.add(btn).on_hover_text(hover);
+
+    // Once a hold fires, that physical press is spent: after a deleted row
+    // disappears, the next row shifts under the still-held pointer and would
+    // otherwise start charging immediately — cascading into the wrong
+    // wallet. Latched until release, and shared by every hold button since
+    // there is one pointer.
+    let consumed_id = egui::Id::new("hold-button-press-consumed");
+    let consumed: bool = ui
+        .ctx()
+        .memory(|m| m.data.get_temp(consumed_id).unwrap_or(false));
+    let pointer_down = ui.input(|i| i.pointer.primary_down());
+    if consumed && !pointer_down {
+        ui.ctx().memory_mut(|m| m.data.remove::<bool>(consumed_id));
+    }
+
+    // Read the pointer directly instead of is_pointer_button_down_on():
+    // egui drops that flag once a press outlives its max click duration
+    // (~0.8s), which silently cancelled long holds. The press must start on
+    // the button AND stay over it — dragging off cancels, like a regular
+    // button.
+    let held = !consumed
+        && pointer_down
+        && ui.input(|i| {
+            i.pointer
+                .press_origin()
+                .is_some_and(|p| resp.rect.contains(p))
+                && i.pointer
+                    .latest_pos()
+                    .is_some_and(|p| resp.rect.contains(p))
+        });
+
+    let mut fired = false;
+    if held {
+        let now = ui.input(|i| i.time);
+        if press_start.is_none() {
+            ui.ctx().memory_mut(|m| m.data.insert_temp(id, now));
+        }
+        let start = press_start.unwrap_or(now);
+        let progress = ((now - start) / hold_secs).clamp(0.0, 1.0) as f32;
+        let r = resp.rect;
+        ui.painter().rect_filled(
+            egui::Rect::from_min_size(r.min, egui::vec2(r.width() * progress, r.height())),
+            0.0,
+            egui::Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 60),
+        );
+        if progress >= 1.0 {
+            fired = true;
+            ui.ctx().memory_mut(|m| {
+                m.data.remove::<f64>(id);
+                m.data.insert_temp(consumed_id, true);
+            });
+        }
+        ui.ctx().request_repaint();
+    } else if press_start.is_some() {
+        // Released early: disarm so the next press starts from zero.
+        ui.ctx().memory_mut(|m| m.data.remove::<f64>(id));
+    }
+    fired
+}
+
 /// Primary action button: solid accent fill, near-black uppercase
 /// label, sharp corners.
 pub(crate) fn accent_button(
@@ -938,4 +1026,128 @@ pub(crate) fn draw_trend_chart(
             colors.text_muted,
         );
     }
+}
+
+/// Radius of each ∞ ring, in stroke widths.
+pub(crate) const QP_RING_RADIUS: f32 = 1.5 * std::f32::consts::SQRT_2;
+/// Gap between the q and p stems, in stroke widths.
+pub(crate) const QP_STEM_GAP: f32 = 0.39;
+/// Where the stems end below the crossing, in stroke widths.
+pub(crate) const QP_STEM_BOTTOM: f32 = 4.0;
+
+/// Where the qp∞ mark sits inside a square `rect`. Placement matches
+/// icon.svg: 60-unit strokes on its 848-unit tile, with the crossing at
+/// y = 470.64 so the mark's bounding box is centred. Shared by the drawn
+/// logo and the cover's assembly animation, so grains land on the real mark.
+pub(crate) struct QpMarkLayout {
+    /// The crossing of the ∞.
+    pub(crate) centre: egui::Pos2,
+    /// One stroke width, in points.
+    pub(crate) unit: f32,
+}
+
+impl QpMarkLayout {
+    pub(crate) fn new(rect: egui::Rect) -> Self {
+        let s = rect.width().min(rect.height());
+        Self {
+            centre: rect.left_top() + egui::vec2(0.5 * s, (470.64 - 88.0) / 848.0 * s),
+            unit: s * 60.0 / 848.0,
+        }
+    }
+
+    /// A point given in stroke widths from the crossing.
+    pub(crate) fn point(&self, x: f32, y: f32) -> egui::Pos2 {
+        self.centre + egui::vec2(x, y) * self.unit
+    }
+}
+
+/// The ∞ as one closed path, in stroke widths from the crossing: two 270°
+/// rings centred at x = ±3, joined by the diagonals of a 3×3 square, which
+/// touch both rings tangentially. The left ring, the "/" diagonal, the right
+/// ring, then back along "\". Angles are in screen space (y down): the left
+/// ring runs from its upper-right touch point round the left to its
+/// lower-right one.
+pub(crate) fn qp_infinity_points() -> Vec<(f32, f32)> {
+    let mut path = Vec::with_capacity(66);
+    for (cx, from, to) in [(-3.0, -45.0_f32, -315.0_f32), (3.0, -135.0, 135.0)] {
+        for i in 0..=32 {
+            let a = (from + (to - from) * i as f32 / 32.0).to_radians();
+            path.push((cx + QP_RING_RADIUS * a.cos(), QP_RING_RADIUS * a.sin()));
+        }
+    }
+    path
+}
+
+/// The Quantum Purse logo
+pub(crate) fn draw_qp_logo(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    mark: egui::Color32,
+    chip: egui::Color32,
+) {
+    use std::f32::consts::FRAC_1_SQRT_2;
+
+    let layout = QpMarkLayout::new(rect);
+    let unit = layout.unit;
+    let p = |x: f32, y: f32| layout.point(x, y);
+    let stroke = egui::Stroke::new(unit, mark);
+    // Clockwise quads. Stems are polygons rather than rects so egui does not
+    // snap their edges to whole pixels and shift them against the rings.
+    let quad = |corners: [(f32, f32); 4], color: egui::Color32| {
+        painter.add(egui::Shape::convex_polygon(
+            corners.map(|(x, y)| p(x, y)).to_vec(),
+            color,
+            egui::Stroke::NONE,
+        ));
+    };
+
+    // Infinity: one closed path; see `qp_infinity_points`.
+    let path = qp_infinity_points()
+        .into_iter()
+        .map(|(x, y)| p(x, y))
+        .collect();
+    painter.add(egui::Shape::closed_line(path, stroke));
+
+    // q and p stems, from the ring tops down past the rings. Each is split
+    // at the crossing, and both halves end hidden inside a diagonal. The gap
+    // between them is `QP_STEM_GAP` stroke widths, kept to at least one
+    // physical pixel so the stems stay apart on the 22px chip on a 1x screen.
+    let g = (QP_STEM_GAP * unit).max(1.0 / painter.pixels_per_point()) / unit;
+    let (inner, outer) = (g / 2.0, g / 2.0 + 1.0);
+    let (top, split, bottom) = (-(QP_RING_RADIUS + 0.5), g / 2.0 + 0.5, QP_STEM_BOTTOM);
+    for (l, r) in [(-outer, -inner), (inner, outer)] {
+        quad([(l, top), (r, top), (r, -split), (l, -split)], mark);
+        quad([(l, split), (r, split), (r, bottom), (l, bottom)], mark);
+    }
+
+    // Weave: cut a gap beside the "\" diagonal, `g` wide measured
+    // horizontally like the stem gap, through what passes under it (the "/"
+    // diagonal, the upper p stem and the lower q stem), then redraw "\" so
+    // its edges stay crisp. The gap below "\" is the one above it turned
+    // half a turn about the crossing.
+    let h = FRAC_1_SQRT_2;
+    let above = [
+        (0.0, -h - g),
+        (outer, outer - h - g),
+        (outer, outer - h),
+        (0.0, -h),
+    ];
+    quad(above, chip);
+    quad(above.map(|(x, y)| (-x, -y)), chip);
+    painter.line_segment([p(-1.5, -1.5), p(1.5, 1.5)], stroke);
+}
+
+/// The app chip: solid accent rounded square with the qp∞ mark knocked
+/// out in the canvas color, mirroring `assets/icon/icon.svg`. The icon's
+/// gradient fill is rendered as a flat accent here — egui has no gradient
+/// fill primitive and the difference is imperceptible at chip size.
+pub(crate) fn draw_qp_logo_chip(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    chip: egui::Color32,
+    mark: egui::Color32,
+) {
+    let s = rect.width().min(rect.height());
+    painter.rect_filled(rect, s * 0.222, chip);
+    draw_qp_logo(painter, rect, mark, chip);
 }
