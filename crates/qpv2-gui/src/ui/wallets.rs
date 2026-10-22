@@ -1,4 +1,4 @@
-//! Wallets tab rendering — vault registry: create, import, export,
+//! Wallets tab rendering — wallet registry: create, import, export,
 //! rename, switch, and delete wallets.
 
 use eframe::egui;
@@ -66,7 +66,7 @@ impl App {
                                     ui,
                                     &self.colors,
                                     "01",
-                                    &format!("Vault Registry // {}", self.wallet_cache.len()),
+                                    &format!("Wallet Registry // {}", self.wallet_cache.len()),
                                 );
                             },
                         );
@@ -98,7 +98,7 @@ impl App {
 
                     if self.wallet_cache.is_empty() {
                         ui.label(
-                            egui::RichText::new("NO VAULTS REGISTERED — CREATE ONE TO BEGIN.")
+                            egui::RichText::new("NO WALLETS REGISTERED — CREATE ONE TO BEGIN.")
                                 .font(label_font(9.5))
                                 .color(self.colors.text_muted),
                         );
@@ -309,9 +309,9 @@ impl App {
                             |ui| {
                                 ui.set_min_width(COL_VAR);
                                 badge(ui, &cw_variant, self.colors.accent3);
-                                // Imported v1 web-wallet vaults use the v1
-                                // single-sig address format; flag them so a
-                                // wrong import choice is diagnosable.
+                                // Wallets imported from the v1 web wallet use
+                                // the v1 single-sig address format; flag them
+                                // so a wrong import choice is diagnosable.
                                 if cw_is_v1 {
                                     ui.add_space(4.0);
                                     badge(ui, "V1", self.colors.warn);

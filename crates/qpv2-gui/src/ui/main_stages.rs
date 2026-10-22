@@ -642,7 +642,7 @@ impl App {
     }
 
     // ────────────────────────────────────────────────────────────────
-    // Setup — vault bootstrap terminal
+    // Setup — wallet bootstrap terminal
     // ────────────────────────────────────────────────────────────────
 
     pub(crate) fn show_welcome(&mut self, ui: &mut egui::Ui) {
@@ -670,7 +670,7 @@ impl App {
                 egui::vec2(panel_w, 0.0),
                 egui::Layout::top_down(egui::Align::Min),
                 |ui| {
-                    // The New Vault dialog's form, minus its Cancel.
+                    // The New Wallet dialog's form, minus its Cancel.
                     panel_frame(&self.colors).show(ui, |ui| {
                         ui.set_width(panel_w - 30.0);
                         if let Some(is_import) =
@@ -729,7 +729,7 @@ impl App {
                             ui,
                             "locked-boot",
                             &format!(
-                                "> VAULT .......... {}\n\
+                                "> WALLET ......... {}\n\
                                  > SCHEME ......... {}\n\
                                  > STATUS ......... SEALED",
                                 self.wallet_name.to_uppercase(),
@@ -770,7 +770,7 @@ impl App {
                                 let cred_id = credential_id.clone();
                                 let btn = accent_button(
                                     &self.colors,
-                                    "Unlock // Security Key",
+                                    "Unlock // FIDO2",
                                     egui::vec2(full_w, 42.0),
                                 );
                                 if ui.add(btn).clicked() {

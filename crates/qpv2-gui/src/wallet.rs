@@ -906,7 +906,7 @@ impl App {
     /// Runs on a worker thread: a locked device holds the connect open until
     /// the user has typed their PIN, and every address needs an on-device
     /// confirmation after that, so the screen it was started from (the setup
-    /// screen or the New Vault dialog) has to keep painting to tell the user
+    /// screen or the New Wallet dialog) has to keep painting to tell the user
     /// what the device is waiting for. `poll_trezor_wallet_setup`
     /// picks up the result and creates the wallet. No-op while an import is
     /// already in flight.

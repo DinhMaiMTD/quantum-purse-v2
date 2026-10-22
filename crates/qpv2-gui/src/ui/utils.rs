@@ -599,7 +599,7 @@ pub(crate) fn breathing_dot(
 /// The line shown under the create buttons while a Trezor connect or a
 /// security-key setup waits on the device, which is where the user has to
 /// act; `text` says what to do there. Used by the setup screen and the New
-/// Vault dialog.
+/// Wallet dialog.
 pub(crate) fn device_waiting_line(ui: &mut egui::Ui, colors: &AppColors, text: &str) {
     ui.horizontal(|ui| {
         let t = ui.input(|i| i.time) as f32;

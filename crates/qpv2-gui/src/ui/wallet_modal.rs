@@ -14,7 +14,7 @@ use crate::ui::utils::{
 };
 use crate::App;
 
-/// Width of the create / import form, shared by the New Vault dialog and
+/// Width of the create / import form, shared by the New Wallet dialog and
 /// the setup screen.
 pub(crate) const WALLET_FORM_W: f32 = 440.0;
 
@@ -103,7 +103,7 @@ impl App {
         }
     }
 
-    /// The create / import form, shared by the New Vault dialog and the setup
+    /// The create / import form, shared by the New Wallet dialog and the setup
     /// screen. Returns the mode picked on its toggle; each caller stores it.
     pub(crate) fn create_import_wallet_form(
         &mut self,
@@ -131,7 +131,7 @@ impl App {
             egui::Layout::left_to_right(egui::Align::Center),
             |ui| {
                 ui.label(
-                    egui::RichText::new("VAULT")
+                    egui::RichText::new("WALLET")
                         .font(label_font(11.0))
                         .color(c_accent),
                 );
@@ -250,7 +250,6 @@ impl App {
         section_header(ui, &self.colors, &sec.next_code(), "Authentication");
         ui.add_space(8.0);
 
-        let verb = if is_import { "Import" } else { "Create" };
         let full_w = ui.available_width();
         let btn_size = egui::vec2(full_w, 34.0);
         // Any of our Trezor operations also disables the create buttons,
@@ -261,10 +260,11 @@ impl App {
 
         let single_sig_convention = SingleSigConvention::new(self.import_from_v1);
 
+        // The buttons name only the method: the create / import toggle above
+        // already says which one they do.
         ui.add_enabled_ui(!device_busy, |ui| {
-            let kc_label = format!("{} // {}", verb, keychain::short_name());
             if ui
-                .add(ghost_button(&self.colors, &kc_label, btn_size))
+                .add(ghost_button(&self.colors, keychain::short_name(), btn_size))
                 .clicked()
             {
                 let v = self.new_wallet_variant;
@@ -277,15 +277,14 @@ impl App {
                 self.import_from_v1 = false;
             }
 
-            // Unlike the buttons around it, this one and Connect // Trezor
+            // Unlike the buttons around it, this one and the Trezor button
             // leave the dialog open while the device works: success closes
             // it by switching to the new wallet, while a failure leaves it
             // open with the inputs kept for a retry, and reports the error
             // in the status line.
             ui.add_space(6.0);
-            let fido_label = format!("{} // Security Key", verb);
             if ui
-                .add(ghost_button(&self.colors, &fido_label, btn_size))
+                .add(ghost_button(&self.colors, "FIDO2", btn_size))
                 .clicked()
             {
                 let v = self.new_wallet_variant;
@@ -297,9 +296,8 @@ impl App {
             }
 
             ui.add_space(6.0);
-            let pw_label = format!("{} // Password", verb);
             if ui
-                .add(ghost_button(&self.colors, &pw_label, btn_size))
+                .add(ghost_button(&self.colors, "Password", btn_size))
                 .clicked()
             {
                 let v = self.new_wallet_variant;
@@ -315,11 +313,11 @@ impl App {
             // A Trezor holds its own seed, so it has nothing to restore from a
             // phrase and is offered only when creating. The device checks the
             // chosen parameter set against its seed and names the ones that fit
-            // if it doesn't. Like Security Key, it leaves the dialog open.
+            // if it doesn't. Like FIDO2, it leaves the dialog open.
             if !is_import {
                 ui.add_space(6.0);
                 if ui
-                    .add(ghost_button(&self.colors, "Connect // Trezor", btn_size))
+                    .add(ghost_button(&self.colors, "Trezor", btn_size))
                     .clicked()
                 {
                     self.start_create_trezor_watch_only_wallet(self.new_wallet_variant, 1);

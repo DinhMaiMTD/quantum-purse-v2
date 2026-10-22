@@ -411,7 +411,7 @@ fn resolve_auth_key(wallet_id: u32, purpose: &str) -> Result<AuthKey, String> {
             Ok(AuthKey::CryptoKey(key))
         }
         AuthMethod::Trezor { .. } => Err(
-            "This is a Trezor (hardware) wallet; signing happens on the device, so there is no vault key."
+            "This is a Trezor (hardware) wallet; signing happens on the device, so this computer holds no key for it."
                 .to_string(),
         ),
     }
@@ -1829,7 +1829,7 @@ fn main() -> Result<(), String> {
                         let auth_method_display = match wallet_info.auth_method {
                             AuthMethod::Password => "Password".to_string(),
                             AuthMethod::Keychain => keychain::display_name().to_string(),
-                            AuthMethod::Fido2 { .. } => "FIDO2 Security Key".to_string(),
+                            AuthMethod::Fido2 { .. } => "FIDO2".to_string(),
                             AuthMethod::Trezor { ref model } => format!("Trezor ({model})"),
                         };
 

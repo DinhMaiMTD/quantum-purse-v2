@@ -1,5 +1,5 @@
 //! Wallet selector popup — quick switch between wallets, anchored
-//! below the telemetry strip's VAULT segment.
+//! below the telemetry strip's WALLET segment.
 
 use eframe::egui;
 
@@ -69,12 +69,12 @@ impl App {
         painter.text(
             bar.left_center() + egui::vec2(PAD, 0.0),
             egui::Align2::LEFT_CENTER,
-            "VAULTS",
+            "WALLETS",
             label_font(9.0),
             c_accent,
         );
         painter.text(
-            bar.left_center() + egui::vec2(PAD + 48.0, 0.0),
+            bar.left_center() + egui::vec2(PAD + 54.0, 0.0),
             egui::Align2::LEFT_CENTER,
             "// SELECT",
             label_font(9.0),
@@ -100,7 +100,7 @@ impl App {
 
             let painter = ui.painter();
             if active {
-                // Active vault: accent tick + tint, same idiom as the
+                // Active wallet: accent tick + tint, same idiom as the
                 // module rail's active state.
                 painter.rect_filled(rect, 0.0, c_accent_tint);
                 painter.rect_filled(
@@ -149,7 +149,7 @@ impl App {
             );
         }
 
-        // ── Quick new-vault row (ghost action) ──
+        // ── Quick new-wallet row (ghost action) ──
         let (rect, resp) = ui.allocate_exact_size(
             egui::vec2(ui.available_width(), ROW_H),
             egui::Sense::click(),
@@ -162,7 +162,7 @@ impl App {
         painter.text(
             egui::pos2(rect.left() + 14.0, rect.center().y),
             egui::Align2::LEFT_CENTER,
-            "+ NEW VAULT",
+            "+ NEW WALLET",
             label_font(9.5),
             c_accent,
         );

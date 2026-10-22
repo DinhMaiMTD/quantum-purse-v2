@@ -591,7 +591,7 @@ impl eframe::App for App {
         self.tick_status(&ctx);
 
         // Not gated on the screen: these can start on Setup and are what
-        // move us off it (they can also start from the New Vault dialog).
+        // move us off it (they can also start from the New Wallet dialog).
         self.poll_trezor_wallet_setup();
         self.poll_fido2_wallet_setup();
 
