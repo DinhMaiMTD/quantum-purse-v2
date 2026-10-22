@@ -413,7 +413,7 @@ impl App {
             self.colors.danger,
             egui::vec2(64.0, 20.0),
             HOLD_SECS,
-            "Hold to delete",
+            Some("Hold to delete"),
         )
         .fired
         {

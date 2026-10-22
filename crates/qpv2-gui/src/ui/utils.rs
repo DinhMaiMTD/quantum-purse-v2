@@ -569,6 +569,8 @@ pub(crate) struct Hold {
     pub(crate) progress: f32,
     /// True on the frame the hold completes.
     pub(crate) fired: bool,
+    /// The button, for a caller that paints its own label over it.
+    pub(crate) rect: egui::Rect,
 }
 
 /// Ghost button in `color` that fires only after being held for
@@ -583,7 +585,7 @@ pub(crate) fn hold_button(
     color: egui::Color32,
     size: egui::Vec2,
     hold_secs: f64,
-    hover: &str,
+    hover: Option<&str>,
 ) -> Hold {
     let btn = egui::Button::new(
         egui::RichText::new(label)
@@ -599,7 +601,11 @@ pub(crate) fn hold_button(
     .min_size(size);
 
     let press_start: Option<f64> = ui.ctx().memory(|m| m.data.get_temp(id));
-    let resp = ui.add(btn).on_hover_text(hover);
+    let resp = ui.add(btn);
+    let resp = match hover {
+        Some(text) => resp.on_hover_text(text),
+        None => resp,
+    };
 
     // Once a hold fires, that physical press is spent: after a deleted row
     // disappears, the next row shifts under the still-held pointer and would
@@ -637,6 +643,7 @@ pub(crate) fn hold_button(
     let mut hold = Hold {
         progress: 0.0,
         fired: false,
+        rect: resp.rect,
     };
     if held {
         let now = ui.input(|i| i.time);

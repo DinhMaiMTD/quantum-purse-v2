@@ -2,7 +2,7 @@
 //! Setup and cover screens.
 
 use crate::types::{label_font, Status, Tab};
-use crate::ui::cover::{draw_cover, reserve_stage, restart_cover};
+use crate::ui::cover::{draw_cover, letters_bottom, reserve_stage, restart_cover};
 use crate::ui::utils::{
     blinking_cursor, breathing_dot, draw_qp_logo_chip, ghost_button, hold_button, panel_frame,
     value_flash,
@@ -26,6 +26,8 @@ const ARROW_W: f32 = 12.0;
 /// How long HOLD TO SHOW must be held. Short: the wallet is shown often, and
 /// the hold only guards against showing it by accident.
 const SHOW_HOLD_SECS: f64 = 1.0;
+/// Gap between the cover's stage and its panel.
+const PANEL_GAP: f32 = 12.0;
 
 impl App {
     // ────────────────────────────────────────────────────────────────
@@ -518,7 +520,7 @@ impl App {
         ui.add_space(12.0);
     }
 
-    /// Persistent one-line event log + key hints and UTC clock.
+    /// Persistent one-line event log and UTC clock.
     fn draw_status_line(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_centered(|ui| {
             ui.add_space(12.0);
@@ -529,18 +531,6 @@ impl App {
                             .font(label_font(9.5))
                             .color(self.colors.text_muted),
                     );
-                    let t = ui.input(|i| i.time) as f32;
-                    let (r, _) =
-                        ui.allocate_exact_size(egui::vec2(8.0, 12.0), egui::Sense::hover());
-                    blinking_cursor(
-                        ui.painter(),
-                        egui::pos2(r.left() + 1.0, r.center().y),
-                        10.0,
-                        self.colors.text_muted,
-                        t,
-                    );
-                    ui.ctx()
-                        .request_repaint_after(std::time::Duration::from_millis(120));
                 }
                 _ => self.show_status(ui),
             }
@@ -550,12 +540,6 @@ impl App {
                 ui.label(
                     egui::RichText::new(chrono::Utc::now().format("%H:%M:%S UTC").to_string())
                         .font(label_font(9.5))
-                        .color(self.colors.text_muted),
-                );
-                ui.add_space(14.0);
-                ui.label(
-                    egui::RichText::new("KEYS 1-7 · MODULES")
-                        .font(label_font(9.0))
                         .color(self.colors.text_muted),
                 );
             });
@@ -733,7 +717,23 @@ impl App {
             // The stage is painted after the panel, once the hold button has
             // said how far through the hold this frame is.
             let stage = reserve_stage(ui);
-            ui.add_space(12.0);
+
+            // The screen reads as a face: q and p are the eyes, the headline
+            // the nose, the boot lines the mustache. The nose sits halfway
+            // between the letters and the boot lines, so it reads as its own
+            // feature rather than part of either.
+            let boot_top = stage.bottom()
+                + ui.spacing().item_spacing.y
+                + PANEL_GAP
+                + panel_frame(&self.colors).total_margin().top;
+            ui.painter().text(
+                egui::pos2(stage.center().x, (letters_bottom(stage) + boot_top) / 2.0),
+                egui::Align2::CENTER_CENTER,
+                "POST QUANTUM HARDENED, POWERED BY CKB",
+                label_font(10.0),
+                self.colors.text_muted,
+            );
+            ui.add_space(PANEL_GAP);
 
             let hold = ui
                 .allocate_ui_with_layout(
@@ -744,46 +744,50 @@ impl App {
                             .show(ui, |ui| {
                                 ui.set_width(panel_w - 30.0);
 
-                                ui.label(
-                                    egui::RichText::new("POST QUANTUM HARDENED, POWERED BY CKB")
-                                        .font(label_font(10.0))
-                                        .color(self.colors.text_muted),
-                                );
-                                ui.add_space(10.0);
-
-                                boot_lines(
-                                    ui,
-                                    "locked-boot",
-                                    &format!(
-                                        "> WALLET ......... {}\n\
-                                         > SCHEME ......... {}\n\
-                                         > STATUS ......... LOCKED",
-                                        self.wallet_name.to_uppercase(),
-                                        variant,
-                                    ),
-                                    90.0,
-                                    11.5,
-                                    self.colors.text_muted,
-                                );
+                                // Centred as one block, its lines still left
+                                // aligned.
+                                ui.vertical_centered(|ui| {
+                                    boot_lines(
+                                        ui,
+                                        "locked-boot",
+                                        &format!(
+                                            "> WALLET ......... {}\n\
+                                             > SCHEME ......... {}\n\
+                                             > STATUS ......... LOCKED",
+                                            self.wallet_name.to_uppercase(),
+                                            variant,
+                                        ),
+                                        90.0,
+                                        11.5,
+                                        self.colors.text_muted,
+                                    );
+                                });
 
                                 ui.add_space(18.0);
 
+                                // Unlabelled: the label is painted below, once
+                                // the letters' pull is known.
                                 hold_button(
                                     ui,
                                     egui::Id::new("cover-hold-to-show"),
-                                    "HOLD TO UNLOCK",
+                                    "",
                                     self.colors.accent,
                                     egui::vec2(panel_w - 30.0, 42.0),
                                     SHOW_HOLD_SECS,
-                                    "Hold for a second to show the wallet",
+                                    None,
                                 )
                             })
                             .inner
                     },
                 )
                 .inner;
-            // True once the letters have joined and the joining has played.
-            if draw_cover(ui, stage, &self.colors, &hold) {
+            let cover = draw_cover(ui, stage, &self.colors, &hold);
+            // HOLD TO UNLOCK rides the letters' pull rather than the fill: the
+            // same while held, but it eases back with them on an early
+            // release, and stays right while the logo forms, where the fill
+            // has already reset.
+            hold_label(ui, hold.rect, cover.pull, self.colors.accent);
+            if cover.done {
                 restart_cover(ui.ctx());
                 self.show_wallet();
             }
@@ -801,6 +805,21 @@ impl App {
             );
         });
     }
+}
+
+/// Paints HOLD TO UNLOCK over `button`, `along` (0 to 1) of the way from its
+/// left padding to its right.
+fn hold_label(ui: &egui::Ui, button: egui::Rect, along: f32, color: egui::Color32) {
+    let galley = ui
+        .painter()
+        .layout_no_wrap("HOLD TO UNLOCK".to_string(), label_font(11.0), color);
+    let pad = ui.spacing().button_padding.x;
+    let room = (button.width() - 2.0 * pad - galley.size().x).max(0.0);
+    let pos = egui::pos2(
+        button.left() + pad + along * room,
+        button.center().y - galley.size().y / 2.0,
+    );
+    ui.painter().galley(pos, galley, color);
 }
 
 /// Type-on boot lines in a fixed-size slot: the full text is measured

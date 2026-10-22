@@ -17,7 +17,9 @@ use std::f32::consts::{PI, TAU};
 use eframe::egui;
 use egui::{Color32, Pos2, Rect, Stroke, Vec2};
 
-use super::utils::{draw_qp_logo, qp_infinity_points, qp_mark_parts, Hold, QpMarkLayout};
+use super::utils::{
+    draw_qp_logo, qp_infinity_points, qp_mark_parts, Hold, QpMarkLayout, QP_STEM_BOTTOM,
+};
 use crate::types::AppColors;
 
 /// The mark's square, as `QpMarkLayout` places it.
@@ -43,9 +45,35 @@ pub(crate) fn reserve_stage(ui: &mut egui::Ui) -> Rect {
         .0
 }
 
-/// Paints the stage for this frame's `hold`. Returns true once the hold has
-/// completed and the joining has played out: the moment to open the wallet.
-pub(crate) fn draw_cover(ui: &egui::Ui, stage: Rect, colors: &AppColors, hold: &Hold) -> bool {
+/// Where the letters end at rest, for laying out what sits below them.
+pub(crate) fn letters_bottom(stage: Rect) -> f32 {
+    let layout = QpMarkLayout::new(mark_square(stage));
+    layout.centre.y + QP_STEM_BOTTOM * layout.unit
+}
+
+/// The mark's square, centred in the stage.
+fn mark_square(stage: Rect) -> Rect {
+    Rect::from_center_size(stage.center(), egui::vec2(MARK_SIZE, MARK_SIZE))
+}
+
+/// What `draw_cover` reports for this frame.
+pub(crate) struct CoverFrame {
+    /// How far the letters have closed, 0 apart to 1 joined: the hold's
+    /// progress, eased back on an early release and held at 1 while the
+    /// joining plays.
+    pub(crate) pull: f32,
+    /// True once the hold has completed and the joining has played out:
+    /// the moment to open the wallet.
+    pub(crate) done: bool,
+}
+
+/// Paints the stage for this frame's `hold`.
+pub(crate) fn draw_cover(
+    ui: &egui::Ui,
+    stage: Rect,
+    colors: &AppColors,
+    hold: &Hold,
+) -> CoverFrame {
     let now = ui.input(|i| i.time);
     let dt = ui.input(|i| i.stable_dt).min(0.05);
     let mut state = ui
@@ -72,8 +100,8 @@ pub(crate) fn draw_cover(ui: &egui::Ui, stage: Rect, colors: &AppColors, hold: &
         .memory_mut(|m| m.data.insert_temp(state_id(), state));
 
     let painter = ui.painter_at(stage);
-    let square = Rect::from_center_size(stage.center(), egui::vec2(MARK_SIZE, MARK_SIZE));
-    match state.finale_at {
+    let square = mark_square(stage);
+    let done = match state.finale_at {
         Some(at) => {
             let f = (now - at) as f32;
             draw_finale(&painter, square, colors, f);
@@ -92,6 +120,10 @@ pub(crate) fn draw_cover(ui: &egui::Ui, stage: Rect, colors: &AppColors, hold: &
             }
             false
         }
+    };
+    CoverFrame {
+        pull: state.pull,
+        done,
     }
 }
 
@@ -232,8 +264,9 @@ fn draw_finale(painter: &egui::Painter, square: Rect, colors: &AppColors, f: f32
     for (delay, alpha) in [(0.0, 0.5), (0.12, 0.25)] {
         let t = (f - delay) / 0.8;
         if t > 0.0 && t < 1.0 {
-            // Peaks under the stage's half-height so the ring is never cut off.
-            let radius = 12.0 + 80.0 * ease_out_cubic(t);
+            // Peaks at 80, so the ring is never cut off and stops short of
+            // the headline that sits below the letters (`show_locked`).
+            let radius = 12.0 + 68.0 * ease_out_cubic(t);
             let color = colors.accent.gamma_multiply(alpha * (1.0 - t));
             painter.circle_stroke(crossing, radius, Stroke::new(1.0, color));
         }
