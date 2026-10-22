@@ -5,6 +5,7 @@ use crate::types::{display_font, label_font, Status, Tab};
 use crate::ui::utils::{
     accent_button, blinking_cursor, breathing_dot, ghost_button, panel_frame, value_flash,
 };
+use crate::ui::wallet_modal::WALLET_FORM_W;
 use crate::App;
 use ckb_node::NodeType;
 use eframe::egui;
@@ -645,7 +646,9 @@ impl App {
     // ────────────────────────────────────────────────────────────────
 
     pub(crate) fn show_welcome(&mut self, ui: &mut egui::Ui) {
-        let panel_w = 600.0;
+        // The form matches the dialog's; the extra 30 px is the panel's
+        // padding and border.
+        let panel_w = WALLET_FORM_W + 30.0;
 
         ui.vertical_centered(|ui| {
             ui.add_space(15.0);

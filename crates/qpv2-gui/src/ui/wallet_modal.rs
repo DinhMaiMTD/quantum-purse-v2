@@ -14,7 +14,9 @@ use crate::ui::utils::{
 };
 use crate::App;
 
-const MODAL_W: f32 = 440.0;
+/// Width of the create / import form, shared by the New Vault dialog and
+/// the setup screen.
+pub(crate) const WALLET_FORM_W: f32 = 440.0;
 
 impl App {
     pub(crate) fn show_wallet_modal(&mut self, ctx: &egui::Context) {
@@ -42,7 +44,7 @@ impl App {
             .inner;
 
         let modal_pos = egui::pos2(
-            (screen_rect.width() - MODAL_W) / 2.0,
+            (screen_rect.width() - WALLET_FORM_W) / 2.0,
             screen_rect.height() * 0.1,
         );
 
@@ -55,7 +57,7 @@ impl App {
                     .stroke(egui::Stroke::new(1.0, self.colors.border2))
                     .inner_margin(egui::Margin::symmetric(20, 18))
                     .show(ui, |ui| {
-                        ui.set_width(MODAL_W);
+                        ui.set_width(WALLET_FORM_W);
                         if let Some(import) = self.create_import_wallet_form(ui, is_import) {
                             self.wallet_modal = if import {
                                 WalletModal::Import
