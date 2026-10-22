@@ -630,7 +630,9 @@ pub(crate) fn hold_button(
                     .latest_pos()
                     .is_some_and(|p| resp.rect.contains(p))
         });
-    let held = !consumed && (pointer_held || (key_down && resp.has_focus()));
+    // Reading input directly bypasses egui's disabled state, so a disabled
+    // button is ruled out here.
+    let held = ui.is_enabled() && !consumed && (pointer_held || (key_down && resp.has_focus()));
 
     let mut hold = Hold {
         progress: 0.0,

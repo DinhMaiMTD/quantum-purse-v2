@@ -1159,6 +1159,14 @@ impl App {
         self.fido2_connect_rx.is_some() || self.fido2_new_account_rx.is_some()
     }
 
+    /// True while NEW ACCOUNT waits on a Trezor or a security key. Switching
+    /// or deleting the open wallet is paused meanwhile: either would drop the
+    /// request while its worker still holds the device, losing the account
+    /// and, for a security key, the busy guard in `resolve_auth_key`.
+    pub(crate) fn new_account_in_flight(&self) -> bool {
+        self.trezor_new_account_rx.is_some() || self.fido2_new_account_rx.is_some()
+    }
+
     /// Refresh the Trezor link status if the cadence is due.
     ///
     /// No-op unless the open wallet is device-backed, and single-flight — a

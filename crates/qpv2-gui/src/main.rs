@@ -595,6 +595,11 @@ impl eframe::App for App {
         // move us off it (they can also start from the New Wallet dialog).
         self.poll_trezor_wallet_setup();
         self.poll_fido2_wallet_setup();
+        // Also not gated: a new account started before the wallet was hidden
+        // is stored as soon as the device answers. A security key's answer is
+        // the vault key, which must not wait in the channel behind the cover.
+        self.poll_trezor_new_account();
+        self.poll_fido2_new_account();
 
         // Device link: probed on its own cadence, polled everywhere. Both are
         // no-ops unless the open wallet is device-backed.
@@ -617,11 +622,6 @@ impl eframe::App for App {
             self.poll_earliest_funding_block();
             self.poll_qr_adoption();
             self.poll_is_seed_export_dialog_up();
-            // Here, not on every screen: a new account started before the
-            // wallet was hidden waits behind the cover, since its status
-            // message would otherwise show on it.
-            self.poll_trezor_new_account();
-            self.poll_fido2_new_account();
         }
 
         // Periodic refresh of balances, transaction history, DAO cells,

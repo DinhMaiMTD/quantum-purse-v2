@@ -88,14 +88,18 @@ impl App {
         );
 
         // ── Wallet rows ──
+        // Switching is paused while a new account waits on the device: it
+        // would drop that request. See `new_account_in_flight`.
+        let paused = self.new_account_in_flight();
         let mut switch_target: Option<(u32, String)> = None;
         for cw in &self.wallet_cache {
             let active = cw.id == self.wallet_id;
+            let switchable = !active && !paused;
             let (rect, resp) = ui.allocate_exact_size(
                 egui::vec2(ui.available_width(), ROW_H),
                 egui::Sense::click(),
             );
-            if resp.clicked() && !active {
+            if resp.clicked() && switchable {
                 switch_target = Some((cw.id, cw.name.clone()));
             }
 
@@ -109,10 +113,10 @@ impl App {
                     0.0,
                     c_accent,
                 );
-            } else if resp.hovered() {
+            } else if resp.hovered() && switchable {
                 row_hover(painter, rect, &self.colors);
             }
-            if resp.hovered() && !active {
+            if resp.hovered() && switchable {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
             }
 
@@ -143,7 +147,13 @@ impl App {
                 egui::Align2::LEFT_CENTER,
                 &cw.name,
                 egui::FontId::proportional(11.5),
-                if active { c_accent } else { c_text },
+                if active {
+                    c_accent
+                } else if paused {
+                    c_muted
+                } else {
+                    c_text
+                },
             );
 
             painter.hline(

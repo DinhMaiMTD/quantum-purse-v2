@@ -355,8 +355,14 @@ impl App {
                         );
 
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            // Paused while a new account waits on the device:
+                            // both would drop that request. Deleting another
+                            // wallet leaves it alone.
+                            let paused = self.new_account_in_flight();
                             ui.add_space(6.0);
-                            self.delete_hold_button(ui, cw_id, delete_target);
+                            ui.add_enabled_ui(!(paused && is_active), |ui| {
+                                self.delete_hold_button(ui, cw_id, delete_target);
+                            });
                             ui.add_space(4.0);
                             if is_active {
                                 // Solid accent marker in the SWITCH slot:
@@ -377,7 +383,7 @@ impl App {
                             } else {
                                 let sw =
                                     ghost_button(&self.colors, "SWITCH", egui::vec2(64.0, 20.0));
-                                if ui.add(sw).clicked() {
+                                if ui.add_enabled(!paused, sw).clicked() {
                                     *switch_target = Some((cw_id, cw_name.clone()));
                                 }
                             }
