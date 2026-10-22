@@ -10,7 +10,7 @@ use qpv2_core::types::{SingleSigConvention, SpxVariant};
 use crate::types::{label_font, WalletModal};
 use crate::ui::utils::{
     device_waiting_line, ghost_button, pin_popup_above_modal, section_header, v1_import_checkbox,
-    SectionCounter,
+    SectionCounter, TREZOR_WAITING_TEXT,
 };
 use crate::App;
 
@@ -326,7 +326,7 @@ impl App {
         });
         // Outside the group so it isn't greyed out with the buttons.
         let waiting_on = if self.trezor_connect_rx.is_some() {
-            Some("Follow the instructions on your Trezor's screen.")
+            Some(TREZOR_WAITING_TEXT)
         } else if self.fido2_connect_rx.is_some() {
             Some("Touch your security key when it blinks, or follow its screen.")
         } else {

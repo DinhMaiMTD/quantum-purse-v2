@@ -146,14 +146,24 @@ impl App {
                 c.text_muted,
                 false,
             ),
-            TransactionStatus::AwaitingSignature => log_line(
-                ui,
-                "[SIGN ]",
-                c.accent,
-                "Awaiting signature authorization...",
-                c.text,
-                true,
-            ),
+            TransactionStatus::AwaitingSignature => {
+                log_line(
+                    ui,
+                    "[SIGN ]",
+                    c.accent,
+                    "Awaiting signature authorization...",
+                    c.text,
+                    true,
+                );
+                // A Trezor signs on its own screen, so say where to look.
+                if matches!(
+                    self.auth_method,
+                    Some(qpv2_core::types::AuthMethod::Trezor { .. })
+                ) {
+                    ui.add_space(4.0);
+                    device_waiting_line(ui, c, TREZOR_WAITING_TEXT);
+                }
+            }
             TransactionStatus::AwaitingCoSigners {
                 request,
                 signatures,
@@ -596,10 +606,15 @@ pub(crate) fn breathing_dot(
     painter.circle_filled(center, 5.5, halo);
 }
 
+/// What a pending Trezor connect or signature asks of the user. Shared by
+/// wallet setup and the transaction log so the wording can't drift apart.
+pub(crate) const TREZOR_WAITING_TEXT: &str = "Follow the instructions on your Trezor's screen.";
+
 /// The line shown under the create buttons while a Trezor connect or a
 /// security-key setup waits on the device, which is where the user has to
 /// act; `text` says what to do there. Used by the setup screen and the New
-/// Wallet dialog.
+/// Wallet dialog, and by the transaction log while a Trezor signature is
+/// pending.
 pub(crate) fn device_waiting_line(ui: &mut egui::Ui, colors: &AppColors, text: &str) {
     ui.horizontal(|ui| {
         let t = ui.input(|i| i.time) as f32;

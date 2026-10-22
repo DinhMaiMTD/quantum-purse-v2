@@ -4,8 +4,9 @@
 use eframe::egui;
 
 use super::utils::{
-    badge, ckb_split, extract_ar, format_duration_ms, ghost_button, panel_frame,
-    pin_popup_above_modal, row_hover, section_header, truncate_middle,
+    badge, ckb_split, device_waiting_line, extract_ar, format_duration_ms, ghost_button,
+    panel_frame, pin_popup_above_modal, row_hover, section_header, truncate_middle,
+    TREZOR_WAITING_TEXT,
 };
 use crate::types::{display_font, label_font, AppColors, DaoView, Status, TransactionStatus};
 use crate::utils::{format_ckb, format_ckb_balance};
@@ -479,7 +480,7 @@ impl App {
 
                         let btn_text = match &self.tx_status {
                             TransactionStatus::Building => "BUILDING TRANSACTION...",
-                            TransactionStatus::AwaitingSignature => "WAITING FOR TOUCH ID...",
+                            TransactionStatus::AwaitingSignature => "AWAITING SIGNATURE...",
                             TransactionStatus::Sending => "BROADCASTING...",
                             _ => "CONFIRM DEPOSIT",
                         };
@@ -553,6 +554,18 @@ impl App {
                                             .color(self.colors.danger),
                                     );
                                 });
+                            }
+                            // A Trezor signs on its own screen, so say where
+                            // to look. The page's log says the same, but this
+                            // dialog covers it.
+                            TransactionStatus::AwaitingSignature
+                                if matches!(
+                                    self.auth_method,
+                                    Some(qpv2_core::types::AuthMethod::Trezor { .. })
+                                ) =>
+                            {
+                                ui.add_space(8.0);
+                                device_waiting_line(ui, &self.colors, TREZOR_WAITING_TEXT);
                             }
                             _ => {}
                         }
