@@ -4,10 +4,11 @@
 use eframe::egui;
 
 use crate::types::{label_font, WalletModal};
-use crate::ui::utils::row_hover;
+use crate::ui::utils::{auth_badge_label, row_hover};
 use crate::App;
 
-const POPUP_W: f32 = 250.0;
+/// Room for a name plus the ACTIVE, wallet-type and variant badges.
+const POPUP_W: f32 = 310.0;
 const ROW_H: f32 = 34.0;
 const PAD: f32 = 12.0;
 
@@ -118,11 +119,14 @@ impl App {
             let cy = rect.center().y;
 
             // Right cluster, painted right to left: the SPHINCS+ variant code
-            // anchors the edge, with the ACTIVE badge (active row only) to its
-            // left, then a uniform gap before the name.
+            // anchors the edge, then the wallet type, then the ACTIVE badge
+            // (active row only), then a uniform gap before the name.
             let mut rx = rect.right() - PAD;
             let variant = format!("{}", cw.spx_variant).to_uppercase();
             rx -= paint_badge(painter, egui::pos2(rx, cy), &variant, c_muted);
+            rx -= 6.0;
+            let wallet_type = auth_badge_label(&cw.auth_method).to_uppercase();
+            rx -= paint_badge(painter, egui::pos2(rx, cy), &wallet_type, c_muted);
             if active {
                 rx -= 6.0;
                 rx -= paint_badge(painter, egui::pos2(rx, cy), "ACTIVE", c_accent);

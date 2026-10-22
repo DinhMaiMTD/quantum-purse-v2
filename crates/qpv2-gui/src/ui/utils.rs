@@ -2,6 +2,7 @@
 //! panels, data rows, instrument backgrounds, and micro-animations.
 
 use eframe::egui;
+use qpv2_core::types::AuthMethod;
 use std::time::Duration;
 
 use crate::types::{label_font, AppColors, Status, TransactionStatus};
@@ -530,6 +531,17 @@ pub(crate) fn v1_import_checkbox(ui: &mut egui::Ui, colors: &AppColors, checked:
                     .color(label),
             );
         });
+}
+
+/// A wallet's type as its badges show it: the AUTH column on the Wallets
+/// and Accounts pages, and the wallet switcher.
+pub(crate) fn auth_badge_label(auth_method: &AuthMethod) -> &'static str {
+    match auth_method {
+        AuthMethod::Password => "PASSWORD",
+        AuthMethod::Keychain => keychain::short_name(),
+        AuthMethod::Fido2 { .. } => "FIDO2",
+        AuthMethod::Trezor { .. } => "TREZOR",
+    }
 }
 
 /// Tiny uppercase badge in a tinted, hairline-stroked box.

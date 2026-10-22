@@ -7,7 +7,9 @@ use qpv2_core::KeyVault;
 
 use super::accounts::{header_cell, table_rule};
 use super::utils::truncate_middle;
-use super::utils::{badge, breathing_dot, ghost_button, panel_frame, row_hover, section_header};
+use super::utils::{
+    auth_badge_label, badge, breathing_dot, ghost_button, panel_frame, row_hover, section_header,
+};
 use crate::types::{display_font, label_font, Status};
 use crate::App;
 
@@ -205,12 +207,7 @@ impl App {
                 let cw_id = cw.id;
                 let cw_name = cw.name.clone();
                 let cw_variant = format!("{}", cw.spx_variant);
-                let auth_label = match &cw.auth_method {
-                    AuthMethod::Password => "PASSWORD".to_string(),
-                    AuthMethod::Keychain => keychain::short_name().to_string(),
-                    AuthMethod::Fido2 { .. } => "FIDO2".to_string(),
-                    AuthMethod::Trezor { .. } => "TREZOR".to_string(),
-                };
+                let auth_label = auth_badge_label(&cw.auth_method);
                 let cw_is_v1 = cw.single_sig_convention == SingleSigConvention::V1;
                 let fixed_name = matches!(cw.auth_method, AuthMethod::Fido2 { .. });
                 let cw_acct_count = cw.account_count;
@@ -324,7 +321,7 @@ impl App {
                             egui::Layout::left_to_right(egui::Align::Center),
                             |ui| {
                                 ui.set_min_width(COL_AUTH);
-                                badge(ui, &auth_label, self.colors.text_muted);
+                                badge(ui, auth_label, self.colors.text_muted);
                             },
                         );
 

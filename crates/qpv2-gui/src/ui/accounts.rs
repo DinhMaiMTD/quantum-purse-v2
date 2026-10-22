@@ -1,12 +1,11 @@
 //! Accounts tab rendering — single-sig account registry.
 
 use eframe::egui;
-use qpv2_core::types::AuthMethod;
 use qpv2_core::KeyVault;
 
 use super::utils::{
-    accent_button, badge, ckb_split, ghost_button, panel_frame, row_hover, section_header,
-    truncate_middle,
+    accent_button, auth_badge_label, badge, ckb_split, ghost_button, panel_frame, row_hover,
+    section_header, truncate_middle,
 };
 use crate::types::{display_font, label_font, AppColors, Status};
 use crate::App;
@@ -112,14 +111,9 @@ impl App {
 
                 // Auth method is wallet-wide, so resolve it once and
                 // repeat the badge on every row.
-                let auth_label = KeyVault::read_wallet_info(self.wallet_id).ok().map(|info| {
-                    match info.auth_method {
-                        AuthMethod::Keychain => keychain::short_name().to_string(),
-                        AuthMethod::Password => "PASSWORD".to_string(),
-                        AuthMethod::Fido2 { .. } => "FIDO2".to_string(),
-                        AuthMethod::Trezor { .. } => "TREZOR".to_string(),
-                    }
-                });
+                let auth_label = KeyVault::read_wallet_info(self.wallet_id)
+                    .ok()
+                    .map(|info| auth_badge_label(&info.auth_method));
 
                 panel_frame(&self.colors).show(ui, |ui| {
                     ui.set_width(ui.available_width());
@@ -154,7 +148,7 @@ impl App {
                                 .color(self.colors.text_muted),
                         );
                     } else {
-                        self.accounts_table(ui, &rows, auth_label.as_deref());
+                        self.accounts_table(ui, &rows, auth_label);
                     }
                 });
 

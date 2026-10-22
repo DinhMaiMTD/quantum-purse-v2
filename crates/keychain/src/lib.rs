@@ -27,7 +27,7 @@ pub use hw_backed::{delete_key, retrieve_key, store_key};
 pub fn display_name() -> &'static str {
     #[cfg(target_os = "macos")]
     {
-        "Touch ID (Keychain)"
+        "Apple Touch ID (Keychain)"
     }
     #[cfg(target_os = "windows")]
     {
@@ -42,7 +42,7 @@ pub fn display_name() -> &'static str {
 pub fn short_name() -> &'static str {
     #[cfg(target_os = "macos")]
     {
-        "Touch ID"
+        "SEP"
     }
     #[cfg(target_os = "windows")]
     {
