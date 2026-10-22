@@ -725,11 +725,21 @@ fn main() -> eframe::Result {
                 .with_target(true)
                 .with_file(true)
                 .with_line_number(true)
+                // Which thread did what, e.g. a FIDO2 worker versus main.
+                .with_thread_names(true)
                 .with_max_level(tracing::Level::INFO)
                 .finish();
             let _ = tracing::subscriber::set_global_default(subscriber);
         }
     }
+
+    // A Rust panic otherwise reaches only stderr, which is lost when the app
+    // is opened from Finder. Log it first, then print it as before.
+    let default_panic_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        tracing::error!("Panic: {}", info);
+        default_panic_hook(info);
+    }));
 
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()

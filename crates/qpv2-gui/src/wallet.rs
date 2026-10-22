@@ -16,6 +16,10 @@ use crate::App;
 /// the cost is negligible.
 const DEVICE_PROBE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
 
+/// Name of the worker that runs a FIDO2 wallet create or import, so the log
+/// shows which thread made each call to the key.
+const FIDO2_SETUP_THREAD: &str = "fido2-setup-thread";
+
 /// Where light-client registration starts scanning for new scripts.
 pub(crate) enum StartingBlock {
     /// Freshly generated key — no history can exist, scan from the tip.
@@ -1275,7 +1279,8 @@ impl App {
         let (tx, rx) = std::sync::mpsc::channel();
         self.fido2_connect_rx = Some(rx);
 
-        std::thread::spawn(move || {
+        let worker = std::thread::Builder::new().name(FIDO2_SETUP_THREAD.to_string());
+        let spawned = worker.spawn(move || {
             let result = (|| -> Fido2WalletUpdate {
                 let verification = fido2_verification("register a new credential")?;
                 let credential = keychain::fido2::register(&verification, &wallet_name)
@@ -1294,6 +1299,10 @@ impl App {
             })();
             let _ = tx.send(result);
         });
+        // The failed spawn drops the sender, so the poller reports the end.
+        if let Err(e) = spawned {
+            tracing::error!("Failed to start the FIDO2 setup thread: {}", e);
+        }
     }
 
     /// Write the wallet `start_create_wallet_with_fido2` prepared. Called by
@@ -1425,7 +1434,8 @@ impl App {
         let (tx, rx) = std::sync::mpsc::channel();
         self.fido2_connect_rx = Some(rx);
 
-        std::thread::spawn(move || {
+        let worker = std::thread::Builder::new().name(FIDO2_SETUP_THREAD.to_string());
+        let spawned = worker.spawn(move || {
             let result = (|| -> Fido2WalletUpdate {
                 // Before the key steps, so a cancelled phrase leaves no
                 // credential behind on the key.
@@ -1451,6 +1461,10 @@ impl App {
             })();
             let _ = tx.send(result);
         });
+        // The failed spawn drops the sender, so the poller reports the end.
+        if let Err(e) = spawned {
+            tracing::error!("Failed to start the FIDO2 setup thread: {}", e);
+        }
     }
 
     /// Write the wallet `start_import_seed_phrase_with_fido2` prepared.
@@ -1525,6 +1539,10 @@ impl App {
 /// the key's PIN only when the key wants one from this host. A key that
 /// verifies on itself (a Trezor, a fingerprint key) gets no dialog.
 fn fido2_verification(purpose: &str) -> Result<keychain::fido2::Verification, String> {
+    // Every FIDO2 action passes here before its first USB call. If the app
+    // dies inside the USB library, the log's last line names the action and
+    // the thread it ran on.
+    tracing::info!("FIDO2: looking for a security key to {}", purpose);
     if !keychain::fido2::needs_host_pin()? {
         return Ok(keychain::fido2::Verification::OnDevice);
     }
