@@ -2,7 +2,7 @@
 //! Setup and cover screens.
 
 use crate::types::{label_font, Status, Tab};
-use crate::ui::cover::{draw_cover_mark, restart_cover};
+use crate::ui::cover::{draw_cover, reserve_stage, restart_cover};
 use crate::ui::utils::{
     blinking_cursor, breathing_dot, draw_qp_logo_chip, ghost_button, hold_button, panel_frame,
     value_flash,
@@ -711,56 +711,77 @@ impl App {
             .unwrap_or_else(|| "SPHINCS+".to_string());
 
         ui.vertical_centered(|ui| {
-            ui.add_space(40.0);
-            draw_cover_mark(ui, &self.colors);
-            ui.add_space(6.0);
+            // Centre the mark and panel vertically, using the height they took
+            // last frame; the status line hangs below and is left out, so a
+            // message appearing doesn't shift them.
+            let height_id = egui::Id::new("cover-group-height");
+            let last_height = ui
+                .ctx()
+                .memory(|m| m.data.get_temp::<f32>(height_id))
+                .unwrap_or(0.0);
+            ui.add_space(((ui.available_height() - last_height) / 2.0).max(24.0));
+            let top = ui.cursor().min.y;
 
-            ui.label(
-                egui::RichText::new("POST QUANTUM HARDENED, POWERED BY CKB")
-                    .font(label_font(10.0))
-                    .color(self.colors.text_muted),
-            );
-            ui.add_space(14.0);
+            // The stage is painted after the panel, once the hold button has
+            // said how far through the hold this frame is.
+            let stage = reserve_stage(ui);
+            ui.add_space(12.0);
 
-            ui.allocate_ui_with_layout(
-                egui::vec2(panel_w, 0.0),
-                egui::Layout::top_down(egui::Align::Min),
-                |ui| {
-                    panel_frame(&self.colors).show(ui, |ui| {
-                        ui.set_width(panel_w - 30.0);
+            let hold = ui
+                .allocate_ui_with_layout(
+                    egui::vec2(panel_w, 0.0),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| {
+                        panel_frame(&self.colors)
+                            .show(ui, |ui| {
+                                ui.set_width(panel_w - 30.0);
 
-                        boot_lines(
-                            ui,
-                            "locked-boot",
-                            &format!(
-                                "> WALLET ......... {}\n\
-                                 > SCHEME ......... {}\n\
-                                 > STATUS ......... HIDDEN",
-                                self.wallet_name.to_uppercase(),
-                                variant,
-                            ),
-                            90.0,
-                            11.5,
-                            self.colors.text_muted,
-                        );
+                                ui.label(
+                                    egui::RichText::new("POST QUANTUM HARDENED, POWERED BY CKB")
+                                        .font(label_font(10.0))
+                                        .color(self.colors.text_muted),
+                                );
+                                ui.add_space(10.0);
 
-                        ui.add_space(18.0);
+                                boot_lines(
+                                    ui,
+                                    "locked-boot",
+                                    &format!(
+                                        "> WALLET ......... {}\n\
+                                         > SCHEME ......... {}\n\
+                                         > STATUS ......... LOCKED",
+                                        self.wallet_name.to_uppercase(),
+                                        variant,
+                                    ),
+                                    90.0,
+                                    11.5,
+                                    self.colors.text_muted,
+                                );
 
-                        if hold_button(
-                            ui,
-                            egui::Id::new("cover-hold-to-show"),
-                            "HOLD TO UNLOCK",
-                            self.colors.accent,
-                            egui::vec2(panel_w - 30.0, 42.0),
-                            SHOW_HOLD_SECS,
-                            "Hold for a second to show the wallet",
-                        ) {
-                            restart_cover(ui.ctx());
-                            self.show_wallet();
-                        }
-                    });
-                },
-            );
+                                ui.add_space(18.0);
+
+                                hold_button(
+                                    ui,
+                                    egui::Id::new("cover-hold-to-show"),
+                                    "HOLD TO UNLOCK",
+                                    self.colors.accent,
+                                    egui::vec2(panel_w - 30.0, 42.0),
+                                    SHOW_HOLD_SECS,
+                                    "Hold for a second to show the wallet",
+                                )
+                            })
+                            .inner
+                    },
+                )
+                .inner;
+            // True once the letters have joined and the joining has played.
+            if draw_cover(ui, stage, &self.colors, &hold) {
+                restart_cover(ui.ctx());
+                self.show_wallet();
+            }
+            let height = ui.cursor().min.y - top;
+            ui.ctx()
+                .memory_mut(|m| m.data.insert_temp(height_id, height));
 
             ui.add_space(16.0);
             // Same centered block width as the panel above, so the

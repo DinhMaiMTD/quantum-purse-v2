@@ -563,10 +563,19 @@ pub(crate) fn badge(ui: &mut egui::Ui, text: &str, color: egui::Color32) {
         });
 }
 
+/// What a hold button did this frame.
+pub(crate) struct Hold {
+    /// How far through the hold the press is, 0 to 1; 0 when not held.
+    pub(crate) progress: f32,
+    /// True on the frame the hold completes.
+    pub(crate) fired: bool,
+}
+
 /// Ghost button in `color` that fires only after being held for
-/// `hold_secs`; a flat progress fill sweeps across while held, so the
-/// gesture is visible at all times. Returns true on the frame the hold
-/// completes. `id` keys the press timer and must be unique per button.
+/// `hold_secs`, by pointer or by Space or Enter while it has keyboard
+/// focus; a flat progress fill sweeps across while held, so the gesture is
+/// visible at all times. `id` keys the press timer and must be unique per
+/// button.
 pub(crate) fn hold_button(
     ui: &mut egui::Ui,
     id: egui::Id,
@@ -575,7 +584,7 @@ pub(crate) fn hold_button(
     size: egui::Vec2,
     hold_secs: f64,
     hover: &str,
-) -> bool {
+) -> Hold {
     let btn = egui::Button::new(
         egui::RichText::new(label)
             .font(label_font(11.0))
@@ -602,7 +611,8 @@ pub(crate) fn hold_button(
         .ctx()
         .memory(|m| m.data.get_temp(consumed_id).unwrap_or(false));
     let pointer_down = ui.input(|i| i.pointer.primary_down());
-    if consumed && !pointer_down {
+    let key_down = ui.input(|i| i.key_down(egui::Key::Space) || i.key_down(egui::Key::Enter));
+    if consumed && !pointer_down && !key_down {
         ui.ctx().memory_mut(|m| m.data.remove::<bool>(consumed_id));
     }
 
@@ -610,9 +620,8 @@ pub(crate) fn hold_button(
     // egui drops that flag once a press outlives its max click duration
     // (~0.8s), which silently cancelled long holds. The press must start on
     // the button AND stay over it — dragging off cancels, like a regular
-    // button.
-    let held = !consumed
-        && pointer_down
+    // button. A key hold counts only while the button has keyboard focus.
+    let pointer_held = pointer_down
         && ui.input(|i| {
             i.pointer
                 .press_origin()
@@ -621,23 +630,27 @@ pub(crate) fn hold_button(
                     .latest_pos()
                     .is_some_and(|p| resp.rect.contains(p))
         });
+    let held = !consumed && (pointer_held || (key_down && resp.has_focus()));
 
-    let mut fired = false;
+    let mut hold = Hold {
+        progress: 0.0,
+        fired: false,
+    };
     if held {
         let now = ui.input(|i| i.time);
         if press_start.is_none() {
             ui.ctx().memory_mut(|m| m.data.insert_temp(id, now));
         }
         let start = press_start.unwrap_or(now);
-        let progress = ((now - start) / hold_secs).clamp(0.0, 1.0) as f32;
+        hold.progress = ((now - start) / hold_secs).clamp(0.0, 1.0) as f32;
         let r = resp.rect;
         ui.painter().rect_filled(
-            egui::Rect::from_min_size(r.min, egui::vec2(r.width() * progress, r.height())),
+            egui::Rect::from_min_size(r.min, egui::vec2(r.width() * hold.progress, r.height())),
             0.0,
             egui::Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 60),
         );
-        if progress >= 1.0 {
-            fired = true;
+        if hold.progress >= 1.0 {
+            hold.fired = true;
             ui.ctx().memory_mut(|m| {
                 m.data.remove::<f64>(id);
                 m.data.insert_temp(consumed_id, true);
@@ -648,7 +661,7 @@ pub(crate) fn hold_button(
         // Released early: disarm so the next press starts from zero.
         ui.ctx().memory_mut(|m| m.data.remove::<f64>(id));
     }
-    fired
+    hold
 }
 
 /// Primary action button: solid accent fill, near-black uppercase
@@ -1078,6 +1091,48 @@ pub(crate) fn qp_infinity_points() -> Vec<(f32, f32)> {
     path
 }
 
+/// The mark's straight-edged parts, in stroke widths from the crossing, as
+/// clockwise quads.
+pub(crate) struct QpMarkParts {
+    /// The q and p stems, from the ring tops down past the rings. Each is
+    /// split at the crossing, and both halves end hidden inside a diagonal:
+    /// upper q, upper p, lower q, lower p.
+    pub(crate) stems: [[(f32, f32); 4]; 4],
+    /// The weave: a gap beside the "\" diagonal through what passes under it
+    /// (the "/" diagonal, the upper p stem and the lower q stem). The gap
+    /// below "\" is the one above it turned half a turn about the crossing.
+    pub(crate) gaps: [[(f32, f32); 4]; 2],
+}
+
+/// The stems and weave gaps for a mark drawn `unit` points per stroke width.
+/// The gap between the stems is `QP_STEM_GAP` stroke widths, kept to at
+/// least one physical pixel so the stems stay apart on the 22px chip on a 1x
+/// screen; the weave gaps are as wide, measured horizontally.
+pub(crate) fn qp_mark_parts(unit: f32, pixels_per_point: f32) -> QpMarkParts {
+    use std::f32::consts::FRAC_1_SQRT_2;
+
+    let g = (QP_STEM_GAP * unit).max(1.0 / pixels_per_point) / unit;
+    let (inner, outer) = (g / 2.0, g / 2.0 + 1.0);
+    let (top, split, bottom) = (-(QP_RING_RADIUS + 0.5), g / 2.0 + 0.5, QP_STEM_BOTTOM);
+    let stem = |l: f32, r: f32, y0: f32, y1: f32| [(l, y0), (r, y0), (r, y1), (l, y1)];
+    let h = FRAC_1_SQRT_2;
+    let above = [
+        (0.0, -h - g),
+        (outer, outer - h - g),
+        (outer, outer - h),
+        (0.0, -h),
+    ];
+    QpMarkParts {
+        stems: [
+            stem(-outer, -inner, top, -split),
+            stem(inner, outer, top, -split),
+            stem(-outer, -inner, split, bottom),
+            stem(inner, outer, split, bottom),
+        ],
+        gaps: [above, above.map(|(x, y)| (-x, -y))],
+    }
+}
+
 /// The Quantum Purse logo
 pub(crate) fn draw_qp_logo(
     painter: &egui::Painter,
@@ -1085,8 +1140,6 @@ pub(crate) fn draw_qp_logo(
     mark: egui::Color32,
     chip: egui::Color32,
 ) {
-    use std::f32::consts::FRAC_1_SQRT_2;
-
     let layout = QpMarkLayout::new(rect);
     let unit = layout.unit;
     let p = |x: f32, y: f32| layout.point(x, y);
@@ -1108,32 +1161,15 @@ pub(crate) fn draw_qp_logo(
         .collect();
     painter.add(egui::Shape::closed_line(path, stroke));
 
-    // q and p stems, from the ring tops down past the rings. Each is split
-    // at the crossing, and both halves end hidden inside a diagonal. The gap
-    // between them is `QP_STEM_GAP` stroke widths, kept to at least one
-    // physical pixel so the stems stay apart on the 22px chip on a 1x screen.
-    let g = (QP_STEM_GAP * unit).max(1.0 / painter.pixels_per_point()) / unit;
-    let (inner, outer) = (g / 2.0, g / 2.0 + 1.0);
-    let (top, split, bottom) = (-(QP_RING_RADIUS + 0.5), g / 2.0 + 0.5, QP_STEM_BOTTOM);
-    for (l, r) in [(-outer, -inner), (inner, outer)] {
-        quad([(l, top), (r, top), (r, -split), (l, -split)], mark);
-        quad([(l, split), (r, split), (r, bottom), (l, bottom)], mark);
+    let parts = qp_mark_parts(unit, painter.pixels_per_point());
+    for stem in parts.stems {
+        quad(stem, mark);
     }
-
-    // Weave: cut a gap beside the "\" diagonal, `g` wide measured
-    // horizontally like the stem gap, through what passes under it (the "/"
-    // diagonal, the upper p stem and the lower q stem), then redraw "\" so
-    // its edges stay crisp. The gap below "\" is the one above it turned
-    // half a turn about the crossing.
-    let h = FRAC_1_SQRT_2;
-    let above = [
-        (0.0, -h - g),
-        (outer, outer - h - g),
-        (outer, outer - h),
-        (0.0, -h),
-    ];
-    quad(above, chip);
-    quad(above.map(|(x, y)| (-x, -y)), chip);
+    // Cut the weave in the background colour, then redraw "\" over it so
+    // its edges stay crisp.
+    for gap in parts.gaps {
+        quad(gap, chip);
+    }
     painter.line_segment([p(-1.5, -1.5), p(1.5, 1.5)], stroke);
 }
 

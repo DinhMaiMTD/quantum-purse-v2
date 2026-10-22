@@ -408,7 +408,9 @@ impl App {
             egui::vec2(64.0, 20.0),
             HOLD_SECS,
             "Hold to delete",
-        ) {
+        )
+        .fired
+        {
             *delete_target = Some(wallet_id);
         }
     }
