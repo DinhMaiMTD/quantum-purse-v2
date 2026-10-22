@@ -54,6 +54,23 @@ pub fn list_devices() -> Vec<HidInfo> {
     get_fidokey_devices()
 }
 
+/// Makes the app's first USB scan, from the main thread. Call once at startup.
+///
+/// On macOS, hidapi (C) ties its global device manager to the event loop of
+/// the first thread that scans, for the life of the process. A short-lived
+/// worker would leave it pointing at a freed event loop, and a later scan can
+/// then crash the app. Tying it to the main thread avoids that. Elsewhere
+/// there is no such tie, so this does nothing.
+pub fn init_usb_on_main_thread() {
+    #[cfg(target_os = "macos")]
+    {
+        // The FIDO2 library's own scan, so it starts the same hidapi. It
+        // panics if hidapi can't start; catching it keeps launch independent
+        // of FIDO2, though any later FIDO2 use panics the same way.
+        let _ = std::panic::catch_unwind(get_fidokey_devices);
+    }
+}
+
 /// Keys only have to accept names this long; longer ones may be refused.
 const LABEL_MAX_BYTES: usize = 64;
 

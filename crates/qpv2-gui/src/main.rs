@@ -741,6 +741,12 @@ fn main() -> eframe::Result {
         default_panic_hook(info);
     }));
 
+    // Before any FIDO2 worker can run; see `init_usb_on_main_thread`.
+    #[cfg(target_os = "macos")]
+    tracing::info!("FIDO2: making the first USB scan on the main thread");
+
+    keychain::fido2::init_usb_on_main_thread();
+
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1100.0, 640.0])
