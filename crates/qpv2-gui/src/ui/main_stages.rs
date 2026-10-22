@@ -107,9 +107,10 @@ impl App {
             });
     }
 
-    /// Number keys 1–7 switch modules when no text field is focused.
+    /// Number keys 1–7 switch modules when no text field is focused and no
+    /// device task is waiting on the user (see `device_task_in_flight`).
     fn handle_module_shortcuts(&mut self, ctx: &egui::Context) {
-        if ctx.memory(|m| m.focused().is_some()) {
+        if ctx.memory(|m| m.focused().is_some()) || self.device_task_in_flight() {
             return;
         }
         const KEYS: [egui::Key; 7] = [
@@ -239,7 +240,7 @@ impl App {
         if foreign_node.is_some() {
             // No dropdown: the Networks tab is where the foreign node is
             // explained and where the way out (another node type) lives.
-            if seg.clicked() {
+            if seg.clicked() && !self.device_task_in_flight() {
                 self.active_tab = Tab::NodeManager;
             }
             seg.on_hover_text(
@@ -331,9 +332,12 @@ impl App {
             ui.add_space(12.0);
 
             // Every wallet type can be hidden behind the cover; see
-            // `show_locked` for why showing it again needs only a hold.
+            // `show_locked` for why showing it again needs only a hold. Not
+            // while a device task waits on the user: see
+            // `device_task_in_flight`.
+            let locked = self.device_task_in_flight();
             let hide = ghost_button(&self.colors, "LOCK", egui::vec2(56.0, 22.0));
-            if ui.add(hide).clicked() {
+            if ui.add_enabled(!locked, hide).clicked() {
                 self.hide_wallet();
             }
             ui.add_space(10.0);
@@ -563,12 +567,16 @@ impl App {
     fn draw_module_rail(&mut self, ui: &mut egui::Ui) {
         let t = ui.input(|i| i.time) as f32;
         ui.add_space(10.0);
+        // The user stays on this module while a device task waits on them:
+        // see `device_task_in_flight`.
+        let locked = self.device_task_in_flight();
 
         for (i, tab) in Tab::ALL.into_iter().enumerate() {
             let is_active = self.active_tab == tab;
             let response =
                 ui.allocate_response(egui::vec2(ui.available_width(), 40.0), egui::Sense::click());
-            if response.clicked() && self.active_tab != tab {
+            let hovered = response.hovered() && !locked;
+            if response.clicked() && !locked && self.active_tab != tab {
                 self.reset_finished_tx_status();
                 self.active_tab = tab;
             }
@@ -583,14 +591,14 @@ impl App {
                     0.0,
                     self.colors.accent,
                 );
-            } else if response.hovered() {
+            } else if hovered {
                 painter.rect_filled(rect, 0.0, self.colors.surface2);
                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
             }
 
             let code_color = if is_active {
                 self.colors.accent
-            } else if response.hovered() {
+            } else if hovered {
                 self.colors.text
             } else {
                 self.colors.text_muted

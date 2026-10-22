@@ -1159,12 +1159,14 @@ impl App {
         self.fido2_connect_rx.is_some() || self.fido2_new_account_rx.is_some()
     }
 
-    /// True while NEW ACCOUNT waits on a Trezor or a security key. Switching
-    /// or deleting the open wallet is paused meanwhile: either would drop the
-    /// request while its worker still holds the device, losing the account
-    /// and, for a security key, the busy guard in `resolve_auth_key`.
-    pub(crate) fn new_account_in_flight(&self) -> bool {
-        self.trezor_new_account_rx.is_some() || self.fido2_new_account_rx.is_some()
+    /// True while a Trezor or security-key task runs in the background and
+    /// the user has to act on the device. The user stays where they are
+    /// meanwhile: LOCK, tab switching, wallet switching and New Wallet are
+    /// blocked. Leaving would hide the line saying what to do on the device,
+    /// and switching or deleting the open wallet would drop the task while
+    /// its worker still holds the device.
+    pub(crate) fn device_task_in_flight(&self) -> bool {
+        self.trezor_operation_in_flight() || self.fido2_operation_in_flight()
     }
 
     /// Refresh the Trezor link status if the cadence is due.

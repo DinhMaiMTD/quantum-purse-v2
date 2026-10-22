@@ -88,9 +88,9 @@ impl App {
         );
 
         // ── Wallet rows ──
-        // Switching is paused while a new account waits on the device: it
-        // would drop that request. See `new_account_in_flight`.
-        let paused = self.new_account_in_flight();
+        // Switching and New Wallet are paused while a device task waits on
+        // the user. See `device_task_in_flight`.
+        let paused = self.device_task_in_flight();
         let mut switch_target: Option<(u32, String)> = None;
         for cw in &self.wallet_cache {
             let active = cw.id == self.wallet_id;
@@ -169,7 +169,7 @@ impl App {
             egui::Sense::click(),
         );
         let painter = ui.painter();
-        if resp.hovered() {
+        if resp.hovered() && !paused {
             row_hover(painter, rect, &self.colors);
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         }
@@ -178,13 +178,13 @@ impl App {
             egui::Align2::LEFT_CENTER,
             "+ NEW WALLET",
             label_font(9.5),
-            c_accent,
+            if paused { c_muted } else { c_accent },
         );
 
         if let Some((id, name)) = switch_target {
             self.switch_wallet(id, &name);
         }
-        if resp.clicked() {
+        if resp.clicked() && !paused {
             // Hand off to the create modal with fresh name/variant
             // inputs, mirroring the Wallets tab's create action.
             self.wallet_modal = WalletModal::Create;

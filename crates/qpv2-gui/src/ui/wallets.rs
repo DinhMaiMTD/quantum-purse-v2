@@ -355,10 +355,10 @@ impl App {
                         );
 
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            // Paused while a new account waits on the device:
-                            // both would drop that request. Deleting another
-                            // wallet leaves it alone.
-                            let paused = self.new_account_in_flight();
+                            // Paused while a device task waits on the user:
+                            // both would drop that task. Deleting another
+                            // wallet leaves it alone. See `device_task_in_flight`.
+                            let paused = self.device_task_in_flight();
                             ui.add_space(6.0);
                             ui.add_enabled_ui(!(paused && is_active), |ui| {
                                 self.delete_hold_button(ui, cw_id, delete_target);

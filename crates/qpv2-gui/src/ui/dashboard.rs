@@ -349,11 +349,14 @@ impl App {
         ];
         let gap = 8.0;
         let btn_w = (ui.available_width() - 4.0 * gap) / 5.0;
+        // A Trezor reconnect can start here from the top bar; the user stays
+        // put while it waits on them. See `device_task_in_flight`.
+        let locked = self.device_task_in_flight();
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = gap;
             for (label, target_tab) in actions {
                 let btn = ghost_button(&self.colors, label, egui::vec2(btn_w, 32.0));
-                if ui.add(btn).clicked() {
+                if ui.add_enabled(!locked, btn).clicked() {
                     self.active_tab = target_tab;
                 }
             }
