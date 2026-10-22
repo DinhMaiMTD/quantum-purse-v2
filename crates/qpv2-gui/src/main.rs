@@ -37,9 +37,9 @@ pub(crate) const QR_ADOPTION_INTERVAL: Duration = Duration::from_secs(1800);
 pub(crate) const QR_ADOPTION_RETRY: Duration = Duration::from_secs(300);
 
 use types::{
-    AppColors, BalanceChartCache, BalanceResult, DaoQueryResult, DaoView, NodeStatus,
-    NodeStatusUpdate, QrAdoptionUpdate, Screen, Series, Status, Tab, TransactionKind,
-    TransactionSendResult, TransactionStatus, TrezorImportUpdate, TxBuildResult, TxHistoryEvent,
+    AppColors, BalanceChartCache, BalanceResult, DaoQueryResult, DaoView, Fido2WalletUpdate,
+    NodeStatus, NodeStatusUpdate, QrAdoptionUpdate, Screen, Series, Status, Tab, TransactionKind,
+    TransactionSendResult, TransactionStatus, TrezorConnectUpdate, TxBuildResult, TxHistoryEvent,
     TxRecord,
 };
 
@@ -210,7 +210,11 @@ pub(crate) struct App {
     // screen. Some(_) means the device is being talked to — the connect
     // button waits and tells the user to look at the device, since a locked
     // Trezor holds the handshake open until its PIN is entered.
-    pub(crate) trezor_connect_rx: Option<mpsc::Receiver<TrezorImportUpdate>>,
+    pub(crate) trezor_connect_rx: Option<mpsc::Receiver<TrezorConnectUpdate>>,
+    // In-flight FIDO2 wallet create or import, the security-key counterpart
+    // of `trezor_connect_rx`. Some(_) while the PIN or seed-phrase dialog is
+    // open or the key waits for a touch or an on-device confirm.
+    pub(crate) fido2_connect_rx: Option<mpsc::Receiver<Fido2WalletUpdate>>,
     // How the seed-export thread tells the main UI thread it is done. Some while
     // that thread owns the pinentry dialog; the overlay locks the wallet meanwhile.
     pub(crate) seed_export_dialog_done_rx: Option<mpsc::Receiver<Result<(), String>>>,
@@ -519,6 +523,7 @@ impl App {
             // doesn't need it; Locked screen reads it before rendering.
             auth_method,
             trezor_connect_rx: None,
+            fido2_connect_rx: None,
             seed_export_dialog_done_rx: None,
             device_status: trezor_connect::DeviceStatus::Working,
             device_status_rx: None,
@@ -585,9 +590,10 @@ impl eframe::App for App {
 
         self.tick_status(&ctx);
 
-        // Not gated on the screen: this one can start on Setup and is what
-        // moves us off it (it can also start from the New Vault dialog).
-        self.poll_trezor_import();
+        // Not gated on the screen: these can start on Setup and are what
+        // move us off it (they can also start from the New Vault dialog).
+        self.poll_trezor_wallet_setup();
+        self.poll_fido2_wallet_setup();
 
         // Device link: probed on its own cadence, polled everywhere. Both are
         // no-ops unless the open wallet is device-backed.
@@ -686,10 +692,14 @@ impl eframe::App for App {
 
         if async_pending {
             ctx.request_repaint();
-        } else if self.trezor_connect_rx.is_some() || self.seed_export_dialog_done_rx.is_some() {
+        } else if self.trezor_connect_rx.is_some()
+            || self.fido2_connect_rx.is_some()
+            || self.seed_export_dialog_done_rx.is_some()
+        {
             // A frame is what checks the channel, so the repaint rate is the
             // poll rate. These waits are human-paced — someone typing a PIN on
-            // the device, or reading a seed phrase in the secure dialog — so
+            // the device, touching a security key, or reading a seed phrase in
+            // the secure dialog — so
             // checking 20 times a second instead of every
             // frame loses nothing and saves the CPU/GPU of rendering
             // thousands of identical frames over several minutes. The other

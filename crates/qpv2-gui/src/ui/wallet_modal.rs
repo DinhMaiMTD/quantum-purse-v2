@@ -9,7 +9,7 @@ use qpv2_core::types::{SingleSigConvention, SpxVariant};
 
 use crate::types::{label_font, WalletModal};
 use crate::ui::utils::{
-    ghost_button, pin_popup_above_modal, section_header, trezor_waiting_line, v1_import_checkbox,
+    device_waiting_line, ghost_button, pin_popup_above_modal, section_header, v1_import_checkbox,
     SectionCounter,
 };
 use crate::App;
@@ -83,7 +83,7 @@ impl App {
                             egui::vec2(ui.available_width(), 34.0),
                         );
                         if ui
-                            .add_enabled(self.trezor_connect_rx.is_none(), cancel)
+                            .add_enabled(!self.external_wallet_setup_in_flight(), cancel)
                             .clicked()
                         {
                             self.wallet_modal = WalletModal::None;
@@ -93,8 +93,8 @@ impl App {
                     });
             });
 
-        // A Trezor connect keeps the dialog open; see `create_import_wallet_form`.
-        if backdrop_clicked && self.trezor_connect_rx.is_none() {
+        // A device setup keeps the dialog open; see `create_import_wallet_form`.
+        if backdrop_clicked && !self.external_wallet_setup_in_flight() {
             self.wallet_modal = WalletModal::None;
             self.new_wallet_name.clear();
             self.import_from_v1 = false;
@@ -112,8 +112,9 @@ impl App {
         let c_accent = self.colors.accent;
         let c_muted = self.colors.text_muted;
         let c_border = self.colors.border;
-        // A Trezor connect started here locks the inputs and exits until it ends.
-        let connecting = self.trezor_connect_rx.is_some();
+        // A Trezor connect or security-key setup started here locks the
+        // inputs and exits until it ends.
+        let connecting = self.external_wallet_setup_in_flight();
 
         // ── Title row + create / import toggle + hairline ──
         let subtitle = if is_import {
@@ -231,7 +232,9 @@ impl App {
         if is_import {
             section_header(ui, &self.colors, &sec.next_code(), "Source");
             ui.add_space(6.0);
-            v1_import_checkbox(ui, &self.colors, &mut self.import_from_v1);
+            ui.add_enabled_ui(!connecting, |ui| {
+                v1_import_checkbox(ui, &self.colors, &mut self.import_from_v1);
+            });
             ui.add_space(4.0);
             ui.label(
                 egui::RichText::new("v1 used a different address format. Check this so the funds on your v1 addresses stay visible.")
@@ -252,7 +255,7 @@ impl App {
         // including a reconnect or a signing for the open wallet: creating a
         // wallet switches to it and would drop that operation the same way,
         // and a second connect would only fail as busy.
-        let device_busy = self.trezor_operation_in_flight();
+        let device_busy = connecting || self.trezor_operation_in_flight();
 
         let single_sig_convention = SingleSigConvention::new(self.import_from_v1);
 
@@ -272,6 +275,11 @@ impl App {
                 self.import_from_v1 = false;
             }
 
+            // Unlike the buttons around it, this one and Connect // Trezor
+            // leave the dialog open while the device works: success closes
+            // it by switching to the new wallet, while a failure leaves it
+            // open with the inputs kept for a retry, and reports the error
+            // in the status line.
             ui.add_space(6.0);
             let fido_label = format!("{} // Security Key", verb);
             if ui
@@ -280,12 +288,10 @@ impl App {
             {
                 let v = self.new_wallet_variant;
                 if is_import {
-                    self.import_seed_phrase_with_fido2(v, single_sig_convention);
+                    self.start_import_seed_phrase_with_fido2(v, single_sig_convention);
                 } else {
-                    self.create_wallet_with_fido2(v);
+                    self.start_create_wallet_with_fido2(v);
                 }
-                self.wallet_modal = WalletModal::None;
-                self.import_from_v1 = false;
             }
 
             ui.add_space(6.0);
@@ -307,10 +313,7 @@ impl App {
             // A Trezor holds its own seed, so it has nothing to restore from a
             // phrase and is offered only when creating. The device checks the
             // chosen parameter set against its seed and names the ones that fit
-            // if it doesn't. Unlike the buttons above, this one leaves the
-            // dialog open: success closes it by switching to the new wallet,
-            // while a failure leaves it open with the name and parameter set
-            // kept for a retry, and reports the error in the status line.
+            // if it doesn't. Like Security Key, it leaves the dialog open.
             if !is_import {
                 ui.add_space(6.0);
                 if ui
@@ -322,9 +325,16 @@ impl App {
             }
         });
         // Outside the group so it isn't greyed out with the buttons.
-        if connecting {
+        let waiting_on = if self.trezor_connect_rx.is_some() {
+            Some("Follow the instructions on your Trezor's screen.")
+        } else if self.fido2_connect_rx.is_some() {
+            Some("Touch your security key when it blinks, or follow its screen.")
+        } else {
+            None
+        };
+        if let Some(text) = waiting_on {
             ui.add_space(8.0);
-            trezor_waiting_line(ui, &self.colors);
+            device_waiting_line(ui, &self.colors, text);
         }
 
         picked

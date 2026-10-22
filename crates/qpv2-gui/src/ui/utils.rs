@@ -596,10 +596,11 @@ pub(crate) fn breathing_dot(
     painter.circle_filled(center, 5.5, halo);
 }
 
-/// The line shown under a Connect Trezor button while an import waits on
-/// the device, which is where the PIN and address confirmations are
-/// answered. Used by the setup screen and the New Vault dialog.
-pub(crate) fn trezor_waiting_line(ui: &mut egui::Ui, colors: &AppColors) {
+/// The line shown under the create buttons while a Trezor connect or a
+/// security-key setup waits on the device, which is where the user has to
+/// act; `text` says what to do there. Used by the setup screen and the New
+/// Vault dialog.
+pub(crate) fn device_waiting_line(ui: &mut egui::Ui, colors: &AppColors, text: &str) {
     ui.horizontal(|ui| {
         let t = ui.input(|i| i.time) as f32;
         // Amber, and pulsing at the urgent rate: everything else around it
@@ -610,7 +611,7 @@ pub(crate) fn trezor_waiting_line(ui: &mut egui::Ui, colors: &AppColors) {
         let (dot, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
         breathing_dot(ui.painter(), dot.center(), attention, t, true);
         ui.label(
-            egui::RichText::new("Follow the instructions on your Trezor's screen.")
+            egui::RichText::new(text)
                 .font(label_font(10.0))
                 .color(attention),
         );

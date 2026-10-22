@@ -271,7 +271,7 @@ pub(crate) type NodeStatusUpdate = Result<NodeStatus, String>;
 /// the parameter set the accounts were derived under, and the accounts
 /// themselves. The variant travels with the result so the setup screen can
 /// change selection while the device is still being confirmed.
-pub(crate) type TrezorImportUpdate = Result<
+pub(crate) type TrezorConnectUpdate = Result<
     (
         String,
         qpv2_core::types::SpxVariant,
@@ -279,6 +279,33 @@ pub(crate) type TrezorImportUpdate = Result<
     ),
     String,
 >;
+
+/// What the security-key steps of a background FIDO2 wallet create or
+/// import produced, for the UI thread to write the wallet with.
+pub(crate) struct Fido2WalletSetup {
+    /// Settled at the click, not at the end: the key stores it at
+    /// registration, so the wallet must keep this exact name.
+    pub(crate) wallet_name: String,
+    pub(crate) variant: qpv2_core::types::SpxVariant,
+    /// Hex-encoded, as stored in `meta.json`.
+    pub(crate) credential_id: String,
+    /// The vault encryption key derived from the key's hmac-secret output.
+    pub(crate) key: qpv2_core::SecureVec,
+}
+
+/// Which button a background FIDO2 setup came from, so the poller hands the
+/// result to the matching finish step. Import also carries the seed phrase
+/// and the address convention it was entered for.
+pub(crate) enum Fido2WalletFlow {
+    Create(Fido2WalletSetup),
+    Import(
+        Fido2WalletSetup,
+        qpv2_core::SecureString,
+        qpv2_core::types::SingleSigConvention,
+    ),
+}
+
+pub(crate) type Fido2WalletUpdate = Result<Fido2WalletFlow, String>;
 
 /// Application state machine.
 #[derive(Debug, Clone, PartialEq)]

@@ -1,8 +1,8 @@
 //! Async polling for background operations (balances, transactions).
 
 use crate::types::{
-    BalanceResult, DaoQueryEvent, Status, TransactionKind, TransactionStatus, TxHistoryEvent,
-    TxKind,
+    BalanceResult, DaoQueryEvent, Fido2WalletFlow, Status, TransactionKind, TransactionStatus,
+    TxHistoryEvent, TxKind,
 };
 use crate::App;
 use qpv2_core::types::AuthMethod;
@@ -592,7 +592,7 @@ impl App {
     /// pollers: the import can start on the setup screen, where they don't
     /// run, and is what moves us off it. It can also start from the New Vault
     /// dialog once a wallet is open.
-    pub(crate) fn poll_trezor_import(&mut self) {
+    pub(crate) fn poll_trezor_wallet_setup(&mut self) {
         let rx = match &self.trezor_connect_rx {
             Some(rx) => rx,
             None => return,
@@ -612,6 +612,43 @@ impl App {
             Err(mpsc::TryRecvError::Disconnected) => {
                 self.trezor_connect_rx = None;
                 let msg = "Trezor import thread terminated unexpectedly.".to_string();
+                tracing::error!("{}", msg);
+                self.status = Status::Error(msg);
+            }
+        }
+    }
+
+    /// Pick up the result of `start_create_wallet_with_fido2` or
+    /// `start_import_seed_phrase_with_fido2` and write the wallet. Runs on
+    /// every screen, like `poll_trezor_wallet_setup`, for the same reason.
+    pub(crate) fn poll_fido2_wallet_setup(&mut self) {
+        let rx = match &self.fido2_connect_rx {
+            Some(rx) => rx,
+            None => return,
+        };
+
+        match rx.try_recv() {
+            Ok(Ok(Fido2WalletFlow::Create(setup))) => {
+                self.fido2_connect_rx = None;
+                self.finish_create_wallet_with_fido2(setup);
+            }
+            Ok(Ok(Fido2WalletFlow::Import(setup, seed_phrase, single_sig_convention))) => {
+                self.fido2_connect_rx = None;
+                self.finish_import_seed_phrase_with_fido2(
+                    setup,
+                    seed_phrase,
+                    single_sig_convention,
+                );
+            }
+            Ok(Err(e)) => {
+                self.fido2_connect_rx = None;
+                tracing::error!("{}", e);
+                self.status = Status::Error(e);
+            }
+            Err(mpsc::TryRecvError::Empty) => {}
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.fido2_connect_rx = None;
+                let msg = "FIDO2 wallet setup thread terminated unexpectedly.".to_string();
                 tracing::error!("{}", msg);
                 self.status = Status::Error(msg);
             }

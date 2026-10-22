@@ -4,7 +4,10 @@ use qpv2_core::types::{AuthKey, AuthMethod, SingleSigConvention, SpxVariant};
 use qpv2_core::KeyVault;
 
 use crate::tx_history::TxHistoryStore;
-use crate::types::{CurrentWallet, Screen, Status, TransactionStatus, TrezorImportUpdate};
+use crate::types::{
+    CurrentWallet, Fido2WalletFlow, Fido2WalletSetup, Fido2WalletUpdate, Screen, Status,
+    TransactionStatus, TrezorConnectUpdate,
+};
 use crate::App;
 
 /// Cadence for the device-link probe. Short enough that unplugging or
@@ -255,6 +258,8 @@ impl App {
         // switches to another wallet instead of finishing it — otherwise its
         // late result would create a second wallet and yank the user into it.
         self.trezor_connect_rx = None;
+        // Same for a pending FIDO2 create or import.
+        self.fido2_connect_rx = None;
         // Link status belongs to the wallet being left; a late probe result
         // would otherwise describe the old wallet's device.
         self.device_status_rx = None;
@@ -902,7 +907,7 @@ impl App {
     /// the user has typed their PIN, and every address needs an on-device
     /// confirmation after that, so the screen it was started from (the setup
     /// screen or the New Vault dialog) has to keep painting to tell the user
-    /// what the device is waiting for. `poll_trezor_import`
+    /// what the device is waiting for. `poll_trezor_wallet_setup`
     /// picks up the result and creates the wallet. No-op while an import is
     /// already in flight.
     pub(crate) fn start_create_trezor_watch_only_wallet(
@@ -925,7 +930,7 @@ impl App {
         self.trezor_connect_rx = Some(rx);
 
         std::thread::spawn(move || {
-            let result = (|| -> TrezorImportUpdate {
+            let result = (|| -> TrezorConnectUpdate {
                 let mut device = trezor_connect::open(&mut trezor_connect::PinentryPairing)
                     .map_err(|e| format!("Could not connect to Trezor: {}", e))?;
                 let model = device.model();
@@ -969,6 +974,13 @@ impl App {
             // only implies device work on a device-backed wallet.
             || (matches!(self.auth_method, Some(AuthMethod::Trezor { .. }))
                 && self.transaction_send_rx.is_some())
+    }
+
+    /// True while a Trezor connect or a security-key setup started from the
+    /// create / import form waits on its device. The form stays open and
+    /// locked meanwhile.
+    pub(crate) fn external_wallet_setup_in_flight(&self) -> bool {
+        self.trezor_connect_rx.is_some() || self.fido2_connect_rx.is_some()
     }
 
     /// Refresh the Trezor link status if the cadence is due.
@@ -1020,7 +1032,7 @@ impl App {
     }
 
     /// Turn the accounts imported from a Trezor into a wallet. Called by
-    /// `poll_trezor_import` on the UI thread; the wallet id is allocated only
+    /// `poll_trezor_wallet_setup` on the UI thread; the wallet id is allocated only
     /// now, so a failed or cancelled import leaves no empty wallet behind.
     pub(crate) fn finish_create_trezor_watch_only_wallet(
         &mut self,
@@ -1238,51 +1250,67 @@ impl App {
     /// its user (a pinentry PIN dialog, or nothing for a key that verifies
     /// on-device), registers a credential, then derives the encryption key
     /// via hmac-secret.
-    pub(crate) fn create_wallet_with_fido2(&mut self, variant: SpxVariant) {
-        let (wallet_id, wallet_name) = match self.prepare_new_wallet() {
-            Ok(v) => v,
+    ///
+    /// Runs on a worker thread, like `start_create_trezor_watch_only_wallet`:
+    /// the PIN dialog can stay open for minutes and the key waits for a
+    /// touch or an on-device confirm, so the screen it was started from has
+    /// to keep painting to say what it waits for. `poll_fido2_wallet_setup`
+    /// picks up the result for `finish_create_wallet_with_fido2`. No-op
+    /// while a security-key setup is already in flight.
+    pub(crate) fn start_create_wallet_with_fido2(&mut self, variant: SpxVariant) {
+        if self.fido2_connect_rx.is_some() {
+            return;
+        }
+        // Settle the name now: the key stores it at registration, so the
+        // wallet keeps this one instead of generating another at the end.
+        let wallet_name = match self.prepare_new_wallet() {
+            Ok((_, name)) => name,
             Err(e) => {
                 tracing::error!("{}", e);
                 self.status = Status::Error(e);
                 return;
             }
         };
-        let verification = match fido2_verification("register a new credential") {
-            Ok(v) => v,
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.fido2_connect_rx = Some(rx);
+
+        std::thread::spawn(move || {
+            let result = (|| -> Fido2WalletUpdate {
+                let verification = fido2_verification("register a new credential")?;
+                let credential = keychain::fido2::register(&verification, &wallet_name)
+                    .map_err(|e| format!("FIDO2 registration failed: {}", e))?;
+                let hmac_output =
+                    keychain::fido2::authenticate(&credential.credential_id, &verification)
+                        .map_err(|e| format!("FIDO2 authentication failed: {}", e))?;
+                let key = qpv2_core::utilities::derive_vault_enc_key(&hmac_output)
+                    .map_err(|e| format!("Key derivation failed: {}", e))?;
+                Ok(Fido2WalletFlow::Create(Fido2WalletSetup {
+                    wallet_name,
+                    variant,
+                    credential_id: hex::encode(&credential.credential_id),
+                    key,
+                }))
+            })();
+            let _ = tx.send(result);
+        });
+    }
+
+    /// Write the wallet `start_create_wallet_with_fido2` prepared. Called by
+    /// `poll_fido2_wallet_setup` on the UI thread; the wallet id is
+    /// allocated only now, so a cancelled or failed key step leaves no empty
+    /// wallet behind. The core checks the name again when it writes.
+    pub(crate) fn finish_create_wallet_with_fido2(&mut self, setup: Fido2WalletSetup) {
+        let Fido2WalletSetup {
+            wallet_name,
+            variant,
+            credential_id,
+            key,
+        } = setup;
+        let wallet_id = match qpv2_core::db::wallets::next_wallet_id() {
+            Ok(id) => id,
             Err(e) => {
-                tracing::error!("{}", e);
-                self.status = Status::Error(e);
-                return;
-            }
-        };
-
-        let credential = match keychain::fido2::register(&verification, &wallet_name) {
-            Ok(c) => c,
-            Err(e) => {
-                let msg = format!("FIDO2 registration failed: {}", e);
-                tracing::error!("{}", msg);
-                self.status = Status::Error(msg);
-                return;
-            }
-        };
-
-        let credential_id = hex::encode(&credential.credential_id);
-
-        let hmac_output =
-            match keychain::fido2::authenticate(&credential.credential_id, &verification) {
-                Ok(h) => h,
-                Err(e) => {
-                    let msg = format!("FIDO2 authentication failed: {}", e);
-                    tracing::error!("{}", msg);
-                    self.status = Status::Error(msg);
-                    return;
-                }
-            };
-
-        let key = match qpv2_core::utilities::derive_vault_enc_key(&hmac_output) {
-            Ok(k) => k,
-            Err(e) => {
-                let msg = format!("Key derivation failed: {}", e);
+                let msg = e.to_string();
                 tracing::error!("{}", msg);
                 self.status = Status::Error(msg);
                 return;
@@ -1369,13 +1397,24 @@ impl App {
         }
     }
 
-    pub(crate) fn import_seed_phrase_with_fido2(
+    /// Import a seed phrase into a FIDO2-authenticated wallet: asks for the
+    /// phrase, then takes the same key steps as
+    /// `start_create_wallet_with_fido2`, on a worker thread for the same
+    /// reason. `poll_fido2_wallet_setup` picks up the result for
+    /// `finish_import_seed_phrase_with_fido2`. No-op while a security-key
+    /// setup is already in flight.
+    pub(crate) fn start_import_seed_phrase_with_fido2(
         &mut self,
         variant: SpxVariant,
         single_sig_convention: SingleSigConvention,
     ) {
-        let (wallet_id, wallet_name) = match self.prepare_new_wallet() {
-            Ok(v) => v,
+        if self.fido2_connect_rx.is_some() {
+            return;
+        }
+        // Settle the name now: the key stores it at registration, so the
+        // wallet keeps this one instead of generating another at the end.
+        let wallet_name = match self.prepare_new_wallet() {
+            Ok((_, name)) => name,
             Err(e) => {
                 tracing::error!("{}", e);
                 self.status = Status::Error(e);
@@ -1383,51 +1422,57 @@ impl App {
             }
         };
 
-        let seed_phrase = match qpv2_core::pinentry::prompt_seed_phrase(variant) {
-            Ok(s) => s,
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.fido2_connect_rx = Some(rx);
+
+        std::thread::spawn(move || {
+            let result = (|| -> Fido2WalletUpdate {
+                // Before the key steps, so a cancelled phrase leaves no
+                // credential behind on the key.
+                let seed_phrase = qpv2_core::pinentry::prompt_seed_phrase(variant)?;
+                let verification = fido2_verification("register a new credential")?;
+                let credential = keychain::fido2::register(&verification, &wallet_name)
+                    .map_err(|e| format!("FIDO2 registration failed: {}", e))?;
+                let hmac_output =
+                    keychain::fido2::authenticate(&credential.credential_id, &verification)
+                        .map_err(|e| format!("FIDO2 authentication failed: {}", e))?;
+                let key = qpv2_core::utilities::derive_vault_enc_key(&hmac_output)
+                    .map_err(|e| format!("Key derivation failed: {}", e))?;
+                Ok(Fido2WalletFlow::Import(
+                    Fido2WalletSetup {
+                        wallet_name,
+                        variant,
+                        credential_id: hex::encode(&credential.credential_id),
+                        key,
+                    },
+                    seed_phrase,
+                    single_sig_convention,
+                ))
+            })();
+            let _ = tx.send(result);
+        });
+    }
+
+    /// Write the wallet `start_import_seed_phrase_with_fido2` prepared.
+    /// Called by `poll_fido2_wallet_setup` on the UI thread; the wallet id
+    /// is allocated only now, so a cancelled or failed key step leaves no
+    /// empty wallet behind. The core checks the name again when it writes.
+    pub(crate) fn finish_import_seed_phrase_with_fido2(
+        &mut self,
+        setup: Fido2WalletSetup,
+        seed_phrase: qpv2_core::SecureString,
+        single_sig_convention: SingleSigConvention,
+    ) {
+        let Fido2WalletSetup {
+            wallet_name,
+            variant,
+            credential_id,
+            key,
+        } = setup;
+        let wallet_id = match qpv2_core::db::wallets::next_wallet_id() {
+            Ok(id) => id,
             Err(e) => {
-                tracing::error!("{}", e);
-                self.status = Status::Error(e);
-                return;
-            }
-        };
-
-        let verification = match fido2_verification("register a new credential") {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::error!("{}", e);
-                self.status = Status::Error(e);
-                return;
-            }
-        };
-
-        let credential = match keychain::fido2::register(&verification, &wallet_name) {
-            Ok(c) => c,
-            Err(e) => {
-                let msg = format!("FIDO2 registration failed: {}", e);
-                tracing::error!("{}", msg);
-                self.status = Status::Error(msg);
-                return;
-            }
-        };
-
-        let credential_id = hex::encode(&credential.credential_id);
-
-        let hmac_output =
-            match keychain::fido2::authenticate(&credential.credential_id, &verification) {
-                Ok(h) => h,
-                Err(e) => {
-                    let msg = format!("FIDO2 authentication failed: {}", e);
-                    tracing::error!("{}", msg);
-                    self.status = Status::Error(msg);
-                    return;
-                }
-            };
-
-        let key = match qpv2_core::utilities::derive_vault_enc_key(&hmac_output) {
-            Ok(k) => k,
-            Err(e) => {
-                let msg = format!("Key derivation failed: {}", e);
+                let msg = e.to_string();
                 tracing::error!("{}", msg);
                 self.status = Status::Error(msg);
                 return;
@@ -1461,6 +1506,9 @@ impl App {
             return;
         }
 
+        // The other import buttons clear this at the click; this one keeps
+        // it for a retry until the wallet exists.
+        self.import_from_v1 = false;
         self.finalize_wallet_setup(
             AuthMethod::Fido2 { credential_id },
             "Wallet imported with FIDO2 security key!",
