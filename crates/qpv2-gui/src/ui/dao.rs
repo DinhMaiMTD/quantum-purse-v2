@@ -115,7 +115,11 @@ impl App {
                 // DAO operation pauses for co-signatures — the same
                 // coordination panel the transfer screen uses. Without
                 // this the flow is alive but invisible from this tab.
-                self.draw_tx_status_log(ui, true);
+                // While the deposit dialog is open it reports its own
+                // progress, so the log would only repeat it behind it.
+                if self.dao_view != DaoView::Deposit {
+                    self.draw_tx_status_log(ui, true);
+                }
                 if matches!(
                     &self.tx_status,
                     TransactionStatus::AwaitingCoSigners { kind, .. } if kind.is_dao()
