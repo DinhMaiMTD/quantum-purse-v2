@@ -323,7 +323,7 @@ impl KeyVault {
         let lock_script_args = config.lock_script_args();
 
         let account = SphincsPlusAccount {
-            index: 0,
+            index,
             lock_args: encode(lock_script_args),
             config,
             initiating_signer_lock_args: None,
