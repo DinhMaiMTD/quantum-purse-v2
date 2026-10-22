@@ -42,7 +42,7 @@ pub fn display_name() -> &'static str {
 pub fn short_name() -> &'static str {
     #[cfg(target_os = "macos")]
     {
-        "SEP"
+        "Touch ID"
     }
     #[cfg(target_os = "windows")]
     {
