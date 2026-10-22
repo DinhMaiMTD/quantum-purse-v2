@@ -97,6 +97,11 @@ pub(crate) enum TxKind {
 /// on every history sync, so a reorg can still move or remove them.
 pub(crate) const CONFIRMATION_DEPTH: u64 = 24;
 
+/// Parameter set the create / import form starts on: at launch, and each
+/// time the New Wallet dialog opens.
+pub(crate) const DEFAULT_SPX_VARIANT: qpv2_core::types::SpxVariant =
+    qpv2_core::types::SpxVariant::Sha2128F;
+
 /// A resolved transaction record for display on the dashboard.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct TxRecord {
