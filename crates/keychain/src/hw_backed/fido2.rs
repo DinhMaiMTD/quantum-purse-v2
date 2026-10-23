@@ -17,7 +17,10 @@ use ctap_hid_fido2::fidokey::MakeCredentialArgsBuilder;
 use ctap_hid_fido2::public_key_credential_user_entity::PublicKeyCredentialUserEntity;
 use ctap_hid_fido2::{get_fidokey_devices, FidoKeyHid, FidoKeyHidFactory, HidInfo, LibCfg};
 use qpv2_core::{utilities, SecureString, SecureVec};
+use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::thread;
+use std::time::Duration;
 use zeroize::Zeroize;
 
 const RP_ID: &str = "quantumpurse.org";
@@ -27,6 +30,15 @@ const RP_ID: &str = "quantumpurse.org";
 /// between requests. One at a time: a second request would reach the key
 /// while it waits for the first one's touch, so callers send them one by one.
 static USB_CONNECTION: Mutex<Option<Arc<FidoKeyHid>>> = Mutex::new(None);
+
+/// How long a request may wait on the user before it is cancelled. The
+/// library stops listening on its own after at least 50 s and then misreports
+/// the key's "still waiting" status as `CTAP1_ERR_INVALID_PARAMETER`, so this
+/// stays under that. It leaves time for a PIN entered on the key's own screen.
+const USER_WAIT_LIMIT: Duration = Duration::from_secs(45);
+
+const NOT_TOUCHED_IN_TIME: &str =
+    "Security key wasn't touched in time. Retry and touch it when it blinks.";
 
 /// Fixed 32-byte salt for hmac-secret. Derived conceptually from
 /// "quantum-purse-v2/fido2/hmac-salt/v1" but hardcoded to avoid
@@ -245,17 +257,45 @@ pub fn cancel() -> Result<(), String> {
         .map_err(|e| format!("Could not cancel the security key's request: {}", e))
 }
 
-/// Runs `request`, which waits on the user, where [`cancel`] can stop it.
+/// Runs `request`, which waits on the user, where [`cancel`] can stop it, and
+/// cancels it at [`USER_WAIT_LIMIT`].
 fn run_cancellable_request<T, E: std::fmt::Display>(
     device: FidoKeyHid,
     verification: &Verification,
     request: impl FnOnce(&FidoKeyHid) -> Result<T, E>,
 ) -> Result<T, String> {
     let device = Arc::new(device);
+    // The timer cancels the request at the limit; the request ending drops
+    // `done`, which wakes the timer early so it exits without cancelling.
+    let (done, wait) = mpsc::channel::<()>();
+    let timer_device = Arc::clone(&device);
+    let timer = thread::Builder::new()
+        .name("fido2-wait-limit".to_string())
+        .spawn(move || {
+            let expired = matches!(
+                wait.recv_timeout(USER_WAIT_LIMIT),
+                Err(RecvTimeoutError::Timeout)
+            );
+            if expired {
+                let _ = timer_device.cancel_selection();
+            }
+            expired
+        })
+        .map_err(|e| format!("Failed to start the security key's timer: {}", e))?;
+
     *usb_connection() = Some(Arc::clone(&device));
     let result = request(&device);
     *usb_connection() = None;
-    result.map_err(|e| map_err_for(verification, e))
+    drop(done);
+    let timed_out = timer.join().unwrap_or(false);
+
+    result.map_err(|e| {
+        if timed_out {
+            NOT_TOUCHED_IN_TIME.to_string()
+        } else {
+            map_err_for(verification, e)
+        }
+    })
 }
 
 fn usb_connection() -> MutexGuard<'static, Option<Arc<FidoKeyHid>>> {
@@ -285,12 +325,14 @@ fn map_err_for(verification: &Verification, e: impl std::fmt::Display) -> String
 }
 
 /// Error translation table.
-const ERR_MSGS: [(&str, &str); 6] = [
+const ERR_MSGS: [(&str, &str); 7] = [
     (
         "CTAP2_ERR_OPERATION_DENIED",
         "The security key wasn't touched in time, or the request was declined on it. \
          Try again and touch it when it blinks.",
     ),
+    // Some keys stop waiting on their own before `USER_WAIT_LIMIT`.
+    ("CTAP2_ERR_USER_ACTION_TIMEOUT", NOT_TOUCHED_IN_TIME),
     // The key's answer to a request stopped by `cancel`.
     ("CTAP2_ERR_KEEPALIVE_CANCEL", "Cancelled."),
     ("CTAP2_ERR_PIN_INVALID", "Wrong PIN."),

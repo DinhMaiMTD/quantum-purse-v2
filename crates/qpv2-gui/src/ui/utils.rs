@@ -742,8 +742,7 @@ pub(crate) const TREZOR_WAITING_TEXT: &str = "Follow the instructions on your Tr
 
 /// What a pending security-key setup or new account asks of the user. Shared
 /// by wallet setup and the accounts panel.
-pub(crate) const FIDO2_WAITING_TEXT: &str =
-    "Touch your FIDO2 key when it blinks, or follow its screen.";
+pub(crate) const FIDO2_WAITING_TEXT: &str = "Touch your blinking FIDO2 key, or follow its screen.";
 
 /// The line shown under the create buttons while a Trezor connect or a
 /// security-key setup waits on the device, which is where the user has to
