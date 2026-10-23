@@ -6,11 +6,14 @@
 //! "<"). When the cover appears the joined mark splits and the two drift
 //! apart, dimmed. While the hold button is held they glide together,
 //! accelerating like magnets, their drift and tilt settling and their facing
-//! tips glowing; released early, they ease back apart. When the hold
-//! completes they meet, the weave cuts in with a flash on "\", a hairline
-//! ring pulses out and a light runs once round the ∞; then the wallet opens.
-//! Everything is strokes, fills and transparency: egui has no blur, so the
-//! glows are stacked translucent discs.
+//! tips glowing, drawing in and brightening just before they touch; released
+//! early, they ease back apart. When the hold completes they meet in a burst
+//! of light, the weave cuts in with a flash on "\", a shockwave of light
+//! sweeps out across the window and a light runs once round the ∞; then the
+//! wallet opens.
+//! Everything is strokes, fills and meshes. egui has no blur, so a glow is a
+//! mesh whose colour fades smoothly to nothing at its edge, and it adds light
+//! to what lies under it rather than covering it.
 
 use std::f32::consts::{PI, TAU};
 
@@ -104,7 +107,10 @@ pub(crate) fn draw_cover(
     let done = match state.finale_at {
         Some(at) => {
             let f = (now - at) as f32;
-            draw_finale(&painter, square, colors, f);
+            // The ripple crosses the whole window, so it is clipped to the
+            // window rather than the stage, on the same layer as the rest.
+            let window = ui.ctx().layer_painter(ui.layer_id());
+            draw_finale(&painter, &window, square, colors, f);
             ui.ctx().request_repaint();
             f >= FINALE_SECS
         }
@@ -203,6 +209,9 @@ fn draw_letters(painter: &egui::Painter, square: Rect, colors: &AppColors, t: f3
     let apart = appear * (1.0 - pull * pull);
     let color = mix(colors.bg, colors.accent, 1.0 - (1.0 - DIM) * apart);
     let tip_glow = smoothstep(0.35, 1.0, pull);
+    // Just before contact the glow draws in and brightens, so the hit has
+    // something to release.
+    let inhale = smoothstep(0.8, 1.0, pull);
 
     let path = qp_infinity_points();
     let half = path.len() / 2;
@@ -219,19 +228,6 @@ fn draw_letters(painter: &egui::Painter, square: Rect, colors: &AppColors, t: f3
             sin: angle.sin(),
         }
     });
-
-    // The facing tips glow as the gap closes, behind the letters.
-    if tip_glow > 0.0 {
-        for place in &placements {
-            glow(
-                painter,
-                place.point((0.0, 0.0)),
-                6.0 + 10.0 * tip_glow,
-                0.22 * tip_glow,
-                colors.accent,
-            );
-        }
-    }
 
     // q is the left ring and stem; p the right ones. The stems run the full
     // height here, unsplit, since nothing crosses them yet.
@@ -254,22 +250,62 @@ fn draw_letters(painter: &egui::Painter, square: Rect, colors: &AppColors, t: f3
             Stroke::NONE,
         ));
     }
+
+    // The facing tips glow as the gap closes. Over the letters, so the tips
+    // themselves heat up, whiter as they are about to touch.
+    if tip_glow > 0.0 {
+        for place in &placements {
+            glow(
+                painter,
+                place.point((0.0, 0.0)),
+                (8.0 + 14.0 * tip_glow) * (1.0 - 0.45 * inhale),
+                0.3 * tip_glow + 0.5 * inhale,
+                mix(colors.accent, Color32::WHITE, 0.6 * inhale),
+            );
+        }
+    }
 }
 
-/// The joining: two hairline rings pulse out from the crossing, the mark
-/// settles with a small bump and a flash on "\" as the weave cuts in, and a
-/// light runs once round the ∞.
-fn draw_finale(painter: &egui::Painter, square: Rect, colors: &AppColors, f: f32) {
+/// The joining: a burst of light where the letters meet and a shockwave of
+/// light sweeping out across the window, the mark settling with a small bump
+/// and a flash on "\" as the weave cuts in, and a light running once round
+/// the ∞.
+fn draw_finale(
+    painter: &egui::Painter,
+    window: &egui::Painter,
+    square: Rect,
+    colors: &AppColors,
+    f: f32,
+) {
     let crossing = QpMarkLayout::new(square).centre;
-    for (delay, alpha) in [(0.0, 0.5), (0.12, 0.25)] {
-        let t = (f - delay) / 0.8;
-        if t > 0.0 && t < 1.0 {
-            // Peaks at 80, so the ring is never cut off and stops short of
-            // the headline that sits below the letters (`show_locked`).
-            let radius = 12.0 + 68.0 * ease_out_cubic(t);
-            let color = colors.accent.gamma_multiply(alpha * (1.0 - t));
-            painter.circle_stroke(crossing, radius, Stroke::new(1.0, color));
-        }
+    let area = window.clip_rect();
+
+    // The hit: the whole window brightens for a frame or two.
+    let wash = 1.0 - f / 0.05;
+    if wash > 0.0 {
+        window.rect_filled(area, 0.0, light(colors.accent, 0.1 * wash));
+    }
+
+    // Out to the window's farthest corner, so the shockwave sweeps the whole
+    // window. It fades as it goes and is gone by the time it gets there.
+    let reach = [
+        area.left_top(),
+        area.right_top(),
+        area.left_bottom(),
+        area.right_bottom(),
+    ]
+    .map(|corner| corner.distance(crossing))
+    .into_iter()
+    .fold(0.0, f32::max);
+    let t = f / 0.8;
+    if t < 1.0 {
+        // Fast out and slowing as it spreads, thinner and dimmer as it grows.
+        let radius = 12.0 + (reach - 12.0) * ease_out_cubic(t);
+        let strength = smoothstep(0.0, 0.06, t) * (1.0 - t).powi(4);
+        // Never most of the radius, so it is a ring from the first frame
+        // rather than a filled disc.
+        let trail = (10.0 + 40.0 * (1.0 - t)).min(0.6 * radius);
+        shockwave(window, crossing, radius, trail, strength, colors);
     }
 
     // Scale about the crossing, so the bump doesn't shift the mark.
@@ -285,6 +321,19 @@ fn draw_finale(painter: &egui::Painter, square: Rect, colors: &AppColors, f: f32
         painter.line_segment(
             [layout.point(-1.5, -1.5), layout.point(1.5, 1.5)],
             Stroke::new(layout.unit, color),
+        );
+    }
+
+    // The burst where the letters met, over the logo so it flares white, and
+    // wide enough to spill well past it.
+    let burst = (f / 0.25).min(1.0);
+    if burst < 1.0 {
+        glow(
+            window,
+            crossing,
+            40.0 + 100.0 * ease_out_cubic(burst),
+            0.9 * (1.0 - burst).powi(2),
+            mix(colors.accent, Color32::WHITE, 0.7),
         );
     }
     light_run(painter, &layout, colors, (f / 0.7).clamp(0.0, 1.0));
@@ -320,12 +369,70 @@ fn light_run(painter: &egui::Painter, layout: &QpMarkLayout, colors: &AppColors,
     }
 }
 
-/// A soft glow: three translucent discs, largest faintest.
-fn glow(painter: &egui::Painter, at: Pos2, radius: f32, alpha: f32, color: Color32) {
-    for k in (1..=3).rev() {
-        let k = k as f32;
-        painter.circle_filled(at, radius * k / 3.0, color.gamma_multiply(alpha * 0.5 / k));
+/// A soft glow: light added over a disc, `strength` (0 to 1) at the centre
+/// and fading smoothly to nothing at the rim.
+fn glow(painter: &egui::Painter, at: Pos2, radius: f32, strength: f32, color: Color32) {
+    // Close to an exponential falloff, so the glow shows no edge.
+    let rows = [
+        (0.0, 1.0),
+        (0.2, 0.6),
+        (0.45, 0.25),
+        (0.7, 0.08),
+        (1.0, 0.0),
+    ]
+    .map(|(r, k)| (radius * r, light(color, strength * k)));
+    radial_band(painter, at, &rows, 48);
+}
+
+/// A ring of light `radius` out from `at`: a crisp, hot front edge with a
+/// glow trailing `trail` points back towards the centre.
+fn shockwave(
+    painter: &egui::Painter,
+    at: Pos2,
+    radius: f32,
+    trail: f32,
+    strength: f32,
+    colors: &AppColors,
+) {
+    let hot = mix(colors.accent, Color32::WHITE, 0.6);
+    let rows = [
+        (radius - trail, Color32::TRANSPARENT),
+        (radius - 0.45 * trail, light(colors.accent, 0.15 * strength)),
+        (radius - 0.12 * trail, light(colors.accent, 0.45 * strength)),
+        (radius, light(hot, strength)),
+        // A point and a half of falloff stands in for anti-aliasing, which
+        // egui doesn't apply to meshes.
+        (radius + 1.5, Color32::TRANSPARENT),
+    ];
+    // Enough segments that the edge stays round across the whole window.
+    radial_band(painter, at, &rows, 256);
+}
+
+/// Concentric rows of vertices round `centre`, each `(radius, colour)`,
+/// joined into one mesh so the colour blends smoothly from row to row.
+fn radial_band(painter: &egui::Painter, centre: Pos2, rows: &[(f32, Color32)], segments: u32) {
+    let mut mesh = egui::Mesh::default();
+    for &(radius, color) in rows {
+        for i in 0..segments {
+            let angle = TAU * i as f32 / segments as f32;
+            mesh.colored_vertex(centre + radius.max(0.0) * Vec2::angled(angle), color);
+        }
     }
+    for row in 1..rows.len() as u32 {
+        let (inner, outer) = ((row - 1) * segments, row * segments);
+        for i in 0..segments {
+            let next = (i + 1) % segments;
+            mesh.add_triangle(inner + i, inner + next, outer + i);
+            mesh.add_triangle(inner + next, outer + next, outer + i);
+        }
+    }
+    painter.add(egui::Shape::mesh(mesh));
+}
+
+/// `color` as light added to what lies under it, at `strength` (0 to 1),
+/// rather than painted over it.
+fn light(color: Color32, strength: f32) -> Color32 {
+    color.gamma_multiply(strength).additive()
 }
 
 fn smoothstep(from: f32, to: f32, x: f32) -> f32 {
