@@ -845,6 +845,7 @@ impl KeyVault {
 
     /// Whether a wallet is backed by a hardware device (Trezor). Such wallets
     /// hold no seed; signing is delegated to the device.
+    /// For CLI only.
     pub fn is_hardware_wallet(wallet_id: u32) -> bool {
         matches!(
             Self::read_wallet_info(wallet_id).map(|w| w.auth_method),

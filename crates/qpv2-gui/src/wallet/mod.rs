@@ -542,16 +542,19 @@ impl App {
     }
 
     pub(crate) fn create_singlesig_account(&mut self) {
-        if KeyVault::is_hardware_wallet(self.wallet_id) {
-            self.start_create_hw_wallet_account();
-            return;
-        }
-        // A security key waits for a touch, so it runs on a worker; the
-        // password and Touch ID dialogs stay inline, as in wallet creation.
-        if let Some(AuthMethod::Fido2 { credential_id }) = &self.auth_method {
-            let credential_id = credential_id.clone();
-            self.start_create_fido2_wallet_account(credential_id);
-            return;
+        match &self.auth_method {
+            Some(AuthMethod::Trezor { .. }) => {
+                self.start_create_hw_wallet_account();
+                return;
+            }
+            // A security key waits for a touch, so it runs on a worker; the
+            // password and Touch ID dialogs stay inline, as in wallet creation.
+            Some(AuthMethod::Fido2 { credential_id }) => {
+                let credential_id = credential_id.clone();
+                self.start_create_fido2_wallet_account(credential_id);
+                return;
+            }
+            _ => {}
         }
 
         let auth = match self.resolve_auth_key("create a new account") {
