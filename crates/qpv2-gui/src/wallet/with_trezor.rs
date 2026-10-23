@@ -56,22 +56,10 @@ impl App {
 
                 let mut accounts = Vec::with_capacity(account_count as usize);
                 for i in 0..account_count {
-                    let addr = device
-                        .get_address(i, variant, is_mainnet, true)
-                        .map_err(|e| {
-                            format!("Failed to import account {} from Trezor: {}", i, e)
-                        })?;
-                    let config = qpv2_core::types::MultisigConfig::single_sig(
-                        variant,
-                        addr.pubkey,
-                        trezor_connect::TREZOR_CONVENTION,
-                    );
-                    accounts.push(qpv2_core::types::SphincsPlusAccount {
-                        index: i,
-                        lock_args: hex::encode(&addr.lock_args),
-                        config,
-                        initiating_signer_lock_args: None,
-                    });
+                    let account = device.get_account(i, variant, is_mainnet).map_err(|e| {
+                        format!("Failed to import account {} from Trezor: {}", i, e)
+                    })?;
+                    accounts.push(account);
                 }
                 Ok((model, variant, accounts))
             })();
@@ -97,7 +85,7 @@ impl App {
             }
         };
 
-        if let Err(e) = KeyVault::create_hw_watch_only_wallet(
+        if let Err(e) = KeyVault::add_hw_watch_only_wallet(
             wallet_id,
             &wallet_name,
             variant,
@@ -160,22 +148,11 @@ impl App {
             let result = (|| -> TrezorAccountCreate {
                 let mut device = trezor_connect::open(&mut trezor_connect::PinentryPairing)
                     .map_err(|e| format!("Could not connect to Trezor: {}", e))?;
-                let addr = device
-                    .get_address(next_index, variant, is_mainnet, true)
+                device
+                    .get_account(next_index, variant, is_mainnet)
                     .map_err(|e| {
                         format!("Failed to import account {} from Trezor: {}", next_index, e)
-                    })?;
-                let config = qpv2_core::types::MultisigConfig::single_sig(
-                    variant,
-                    addr.pubkey,
-                    trezor_connect::TREZOR_CONVENTION,
-                );
-                Ok(qpv2_core::types::SphincsPlusAccount {
-                    index: next_index,
-                    lock_args: hex::encode(&addr.lock_args),
-                    config,
-                    initiating_signer_lock_args: None,
-                })
+                    })
             })();
             let _ = tx.send(result);
         });
@@ -187,31 +164,7 @@ impl App {
         &mut self,
         account: qpv2_core::types::SphincsPlusAccount,
     ) {
-        // The store numbers the account by the single-sig count when it
-        // writes, silently. That count must still be the index the device
-        // derived the account at, or signing would ask for a different key.
-        match KeyVault::get_singlesig_lock_args(self.wallet_id) {
-            Ok(existing) if existing.len() as u32 == account.index => {}
-            Ok(existing) => {
-                let msg = format!(
-                    "The wallet's accounts changed while the Trezor was confirming account {} \
-                     (the next account is now {}). Try again.",
-                    account.index,
-                    existing.len()
-                );
-                tracing::error!("{}", msg);
-                self.status = Status::Error(msg);
-                return;
-            }
-            Err(e) => {
-                let msg = format!("Failed to read the wallet's accounts: {}", e);
-                tracing::error!("{}", msg);
-                self.status = Status::Error(msg);
-                return;
-            }
-        }
-
-        if let Err(e) = qpv2_core::db::add_singlesig_account(self.wallet_id, account.clone()) {
+        if let Err(e) = KeyVault::add_hw_watch_only_account(self.wallet_id, account.clone()) {
             let msg = format!("Failed to store account: {}", e);
             tracing::error!("{}", msg);
             self.status = Status::Error(msg);

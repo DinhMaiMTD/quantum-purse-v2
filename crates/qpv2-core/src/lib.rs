@@ -863,7 +863,7 @@ impl KeyVault {
     /// callers pass the device crate's `TREZOR_CONVENTION` rather than naming
     /// a variant here, so the wallet record and the accounts can never drift
     /// apart the way they did when this was hard-coded.
-    pub fn create_hw_watch_only_wallet(
+    pub fn add_hw_watch_only_wallet(
         wallet_id: u32,
         name: &str,
         variant: SpxVariant,
@@ -894,6 +894,30 @@ impl KeyVault {
         }
 
         Ok(())
+    }
+
+    /// Stores the next account of a device-backed wallet, derived by the
+    /// device at `account.index`: the counterpart of
+    /// [`Self::gen_singlesig_account`], which derives it here instead.
+    ///
+    /// The store numbers each account by the single-sig count when it writes,
+    /// silently. That count must still be the index the device derived the
+    /// account at, or signing would ask the device for a different key, so an
+    /// account whose number has moved on (the accounts changed while the
+    /// device was confirming) is refused.
+    pub fn add_hw_watch_only_account(
+        wallet_id: u32,
+        account: SphincsPlusAccount,
+    ) -> Result<(), String> {
+        let next = Self::get_singlesig_lock_args(wallet_id)?.len() as u32;
+        if next != account.index {
+            return Err(format!(
+                "The wallet's accounts changed while the device was confirming account {} \
+                 (the next account is now {}). Try again.",
+                account.index, next
+            ));
+        }
+        db::add_singlesig_account(wallet_id, account).map_err(|e| e.to_string())
     }
 
     pub fn list_wallets() -> Result<Vec<types::WalletEntry>, String> {

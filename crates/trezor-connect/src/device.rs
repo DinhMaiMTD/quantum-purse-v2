@@ -1,11 +1,12 @@
-//! Device discovery, connection, and the `get_address` round-trip.
+//! Device discovery, connection, and the `get_address` round-trip with the
+//! account built from it.
 //!
 //! The device is driven over THP (see [`crate::thp`]); this module holds the
 //! public handle and the shared address/convention types.
 
 use std::net::SocketAddr;
 
-use qpv2_core::types::{SingleSigConvention, SpxVariant};
+use qpv2_core::types::{MultisigConfig, SingleSigConvention, SphincsPlusAccount, SpxVariant};
 
 use crate::link::acquire_session_guard;
 use crate::thp::pairing::{NoInteraction, PairingUx};
@@ -205,5 +206,25 @@ impl TrezorSession {
     ) -> Result<DeviceAddress, TrezorSignerError> {
         self.session
             .get_address(account_index, variant, is_mainnet, show_display)
+    }
+
+    /// The single-sig account at `account_index`, ready to store. The device
+    /// derives it and shows its address for confirmation; `is_mainnet` only
+    /// sets that address's prefix, as the account is the same on either
+    /// network.
+    pub fn get_account(
+        &mut self,
+        account_index: u32,
+        variant: SpxVariant,
+        is_mainnet: bool,
+    ) -> Result<SphincsPlusAccount, TrezorSignerError> {
+        let addr = self.get_address(account_index, variant, is_mainnet, true)?;
+        let config = MultisigConfig::single_sig(variant, addr.pubkey, TREZOR_CONVENTION);
+        Ok(SphincsPlusAccount {
+            index: account_index,
+            lock_args: hex::encode(&addr.lock_args),
+            config,
+            initiating_signer_lock_args: None,
+        })
     }
 }
