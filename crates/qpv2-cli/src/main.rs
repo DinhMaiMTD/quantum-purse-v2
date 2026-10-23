@@ -154,7 +154,12 @@ enum MnemonicCommands {
 #[derive(Subcommand)]
 enum AccountCommands {
     /// Generate a new SPHINCS+ account
-    New,
+    New {
+        /// Network: mainnet or testnet. Used only by a Trezor wallet, whose
+        /// device shows the new account's address on its screen
+        #[arg(long, default_value = "testnet")]
+        network: String,
+    },
     /// Create a multisig account with co-signers
     NewMultisig {
         /// Lock args of the single-sig account to use as local signer (from `account list`)
@@ -964,6 +969,40 @@ fn sign_transfer_with_trezor(
         .map_err(|e| format!("Failed to fill witness: {}", e))
 }
 
+/// Imports a Trezor wallet's next account from the device, which derives it
+/// and shows its address for confirmation. Only the public part is stored, as
+/// in the app's NEW ACCOUNT.
+///
+/// Single-sig accounts are numbered from 0 with no gaps, so the next index is
+/// their count. Multisig accounts are stored apart and don't count.
+fn add_new_trezor_account(
+    wallet_id: u32,
+    network: &str,
+) -> Result<qpv2_core::types::SphincsPlusAccount, String> {
+    let is_mainnet = match network {
+        "mainnet" => true,
+        "testnet" => false,
+        _ => {
+            return Err(format!(
+                "Invalid network '{}'. Use 'mainnet' or 'testnet'.",
+                network
+            ))
+        }
+    };
+    let variant = KeyVault::get_spx_variant(wallet_id)?;
+    let index = KeyVault::get_singlesig_lock_args(wallet_id)?.len() as u32;
+
+    println!("Confirm the address of account {} on your Trezor...", index);
+    let mut device = trezor_connect::open(&mut trezor_connect::StdinPairing)
+        .map_err(|e| format!("Could not connect to Trezor: {}", e))?;
+    let account = device
+        .get_account(index, variant, is_mainnet)
+        .map_err(|e| format!("Failed to import account {} from Trezor: {}", index, e))?;
+    KeyVault::add_hw_watch_only_account(wallet_id, account.clone())
+        .map_err(|e| format!("Failed to store account: {}", e))?;
+    Ok(account)
+}
+
 /// Shared context for the multisig `build-*` CLI handlers: the wallet,
 /// account selector, fee, output path, and network that every variant
 /// needs. Grouping them keeps each handler's own parameter list short.
@@ -1452,12 +1491,18 @@ fn main() -> Result<(), String> {
             let (wallet_id, _) = find_wallet(&cli.wallet)?;
 
             match command {
-                AccountCommands::New => {
-                    let variant = KeyVault::get_spx_variant(wallet_id)?;
-                    let vault = KeyVault::new(variant, wallet_id);
+                AccountCommands::New { network } => {
+                    // A Trezor gives this computer no key, so the device
+                    // derives the account instead, as the app's NEW ACCOUNT does.
+                    let account = if KeyVault::is_hardware_wallet(wallet_id) {
+                        add_new_trezor_account(wallet_id, &network)?
+                    } else {
+                        let variant = KeyVault::get_spx_variant(wallet_id)?;
+                        let vault = KeyVault::new(variant, wallet_id);
 
-                    let auth = resolve_auth_key(wallet_id, "create a new account")?;
-                    let account = vault.gen_singlesig_account(auth)?;
+                        let auth = resolve_auth_key(wallet_id, "create a new account")?;
+                        vault.gen_singlesig_account(auth)?
+                    };
                     println!("✓ New account created");
                     println!(
                         "Identifier(CKB quantum lock script args): {}",
