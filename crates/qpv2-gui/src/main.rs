@@ -3,6 +3,7 @@
 // Release builds on Windows run without a console; debug builds keep it for `cargo run` output.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod cosign;
 mod fetcher;
 mod poller;
 mod qr_adoption;
