@@ -779,13 +779,17 @@ fn handle_dao_deposit(
     let message = ckb_node::compute_signing_message(&unsigned_tx, &input_cells, 0)
         .map_err(|e| format!("Failed to compute tx message: {}", e))?;
 
-    let auth = resolve_auth_key(wallet_id, "deposit into Nervos DAO")?;
-    let variant = KeyVault::get_spx_variant(wallet_id)?;
-    let vault = KeyVault::new(variant, wallet_id);
-    let signature_bytes = vault.ckb_sign(auth, lock_args.to_string(), message.to_vec())?;
+    let signed_tx = if KeyVault::is_hardware_wallet(wallet_id) {
+        sign_with_trezor(&account, &qp_client, unsigned_tx)?
+    } else {
+        let auth = resolve_auth_key(wallet_id, "deposit into Nervos DAO")?;
+        let variant = KeyVault::get_spx_variant(wallet_id)?;
+        let vault = KeyVault::new(variant, wallet_id);
+        let signature_bytes = vault.ckb_sign(auth, lock_args.to_string(), message.to_vec())?;
 
-    let signed_tx = ckb_node::fill_witness(unsigned_tx, 0, signature_bytes)
-        .map_err(|e| format!("Failed to fill witness: {}", e))?;
+        ckb_node::fill_witness(unsigned_tx, 0, signature_bytes)
+            .map_err(|e| format!("Failed to fill witness: {}", e))?
+    };
 
     println!("Submitting transaction...");
     let tx_hash = ckb_node::wallet_helpers::tx_builder::send_transaction(&qp_client, &signed_tx)
@@ -830,13 +834,17 @@ fn handle_dao_prepare(
     let message = ckb_node::compute_signing_message(&unsigned_tx, &input_cells, 0)
         .map_err(|e| format!("Failed to compute tx message: {}", e))?;
 
-    let auth = resolve_auth_key(wallet_id, "request a DAO withdrawal")?;
-    let variant = KeyVault::get_spx_variant(wallet_id)?;
-    let vault = KeyVault::new(variant, wallet_id);
-    let signature_bytes = vault.ckb_sign(auth, lock_args.to_string(), message.to_vec())?;
+    let signed_tx = if KeyVault::is_hardware_wallet(wallet_id) {
+        sign_with_trezor(&account, &qp_client, unsigned_tx)?
+    } else {
+        let auth = resolve_auth_key(wallet_id, "request a DAO withdrawal")?;
+        let variant = KeyVault::get_spx_variant(wallet_id)?;
+        let vault = KeyVault::new(variant, wallet_id);
+        let signature_bytes = vault.ckb_sign(auth, lock_args.to_string(), message.to_vec())?;
 
-    let signed_tx = ckb_node::fill_witness(unsigned_tx, 0, signature_bytes)
-        .map_err(|e| format!("Failed to fill witness: {}", e))?;
+        ckb_node::fill_witness(unsigned_tx, 0, signature_bytes)
+            .map_err(|e| format!("Failed to fill witness: {}", e))?
+    };
 
     println!("Submitting transaction...");
     let tx_hash = ckb_node::wallet_helpers::tx_builder::send_transaction(&qp_client, &signed_tx)
@@ -881,13 +889,17 @@ fn handle_dao_withdraw(
     let message = ckb_node::compute_signing_message(&unsigned_tx, &input_cells, 0)
         .map_err(|e| format!("Failed to compute tx message: {}", e))?;
 
-    let auth = resolve_auth_key(wallet_id, "complete the DAO withdrawal")?;
-    let variant = KeyVault::get_spx_variant(wallet_id)?;
-    let vault = KeyVault::new(variant, wallet_id);
-    let signature_bytes = vault.ckb_sign(auth, lock_args.to_string(), message.to_vec())?;
+    let signed_tx = if KeyVault::is_hardware_wallet(wallet_id) {
+        sign_with_trezor(&account, &qp_client, unsigned_tx)?
+    } else {
+        let auth = resolve_auth_key(wallet_id, "complete the DAO withdrawal")?;
+        let variant = KeyVault::get_spx_variant(wallet_id)?;
+        let vault = KeyVault::new(variant, wallet_id);
+        let signature_bytes = vault.ckb_sign(auth, lock_args.to_string(), message.to_vec())?;
 
-    let signed_tx = ckb_node::fill_witness(unsigned_tx, 0, signature_bytes)
-        .map_err(|e| format!("Failed to fill witness: {}", e))?;
+        ckb_node::fill_witness(unsigned_tx, 0, signature_bytes)
+            .map_err(|e| format!("Failed to fill witness: {}", e))?
+    };
 
     println!("Submitting transaction...");
     let tx_hash = ckb_node::wallet_helpers::tx_builder::send_transaction(&qp_client, &signed_tx)
@@ -956,7 +968,7 @@ fn handle_transfer(
         .map_err(|e| format!("Failed to compute tx message: {}", e))?;
 
     let signed_tx = if KeyVault::is_hardware_wallet(wallet_id) {
-        sign_transfer_with_trezor(&account, &qp_client, unsigned_tx)?
+        sign_with_trezor(&account, &qp_client, unsigned_tx)?
     } else {
         let auth = resolve_auth_key(wallet_id, "sign and send the transfer")?;
         let variant = KeyVault::get_spx_variant(wallet_id)?;
@@ -974,16 +986,21 @@ fn handle_transfer(
     Ok(())
 }
 
-/// Sign a single-sig transfer with a Trezor device: stream the transaction (and
-/// its previous transactions) to the device and fill the returned witness lock.
-fn sign_transfer_with_trezor(
+/// Sign a single-sig transaction (a transfer or any DAO step) with a Trezor
+/// device: stream it, with its previous transactions and the chain context
+/// the device checks a DAO step against, and fill the returned witness lock.
+/// The same steps as the app's `delegate_trezor_sign_and_send`.
+fn sign_with_trezor(
     account: &qpv2_core::types::SphincsPlusAccount,
     qp_client: &ckb_node::QpClient,
     unsigned_tx: ckb_types::core::TransactionView,
 ) -> Result<ckb_types::core::TransactionView, String> {
     println!("Fetching previous transactions for the device...");
-    let prev_txs = ckb_node::wallet_helpers::tx_builder::fetch_prev_txs(qp_client, &unsigned_tx)
-        .map_err(|e| format!("Failed to fetch previous transactions: {}", e))?;
+    let context = ckb_node::wallet_helpers::tx_builder::fetch_hardware_signing_context(
+        qp_client,
+        &unsigned_tx,
+    )
+    .map_err(|e| format!("Failed to fetch Trezor signing context: {}", e))?;
 
     let variant = account.config.signers[0].variant;
     let sign_group: Vec<u32> = (0..unsigned_tx.inputs().len() as u32).collect();
@@ -992,13 +1009,15 @@ fn sign_transfer_with_trezor(
     let mut device = trezor_connect::open(&mut trezor_connect::StdinPairing)
         .map_err(|e| format!("Could not connect to Trezor: {}", e))?;
     let signed = device
-        .sign_tx(
+        .sign_tx_with_context(
             account.index,
             variant,
             qp_client.is_mainnet(),
             &unsigned_tx,
             account.config.max_witness_lock_size(),
-            &prev_txs,
+            &context.prev_txs,
+            &context.prev_tx_block_hashes,
+            &context.headers,
             &sign_group,
         )
         .map_err(|e| format!("Trezor signing failed: {}", e))?;
