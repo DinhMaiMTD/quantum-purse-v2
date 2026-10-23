@@ -31,6 +31,10 @@ enum Commands {
         /// Use a FIDO2 security key with hmac-secret extension
         #[arg(long)]
         fido2: bool,
+        /// Use a Trezor: the device keeps the seed, and `account new` adds
+        /// accounts from it
+        #[arg(long)]
+        trezor: bool,
     },
     /// Mnemonic operations (import/export)
     Mnemonic {
@@ -490,6 +494,25 @@ fn init_with_fido2(vault: &KeyVault, name: &str) -> Result<(), String> {
     let auth_method = AuthMethod::Fido2 { credential_id };
     vault.generate_master_seed(AuthKey::CryptoKey(key), auth_method, name)?;
     Ok(())
+}
+
+/// Creates a Trezor wallet. The device keeps the seed, so only the wallet
+/// record is written, with no accounts yet, like the other `init`s.
+/// Connecting first names the device's model and pairs it if needed.
+fn init_with_trezor(wallet_id: u32, name: &str, variant: SpxVariant) -> Result<(), String> {
+    // Connecting can wait on the device: its PIN, a "Connect?" confirm, or a
+    // pairing code to type here. Say where to look, as the app does.
+    println!("Follow the instructions on your Trezor's screen...");
+    let device = trezor_connect::open(&mut trezor_connect::StdinPairing)
+        .map_err(|e| format!("Could not connect to Trezor: {}", e))?;
+    KeyVault::add_hw_watch_only_wallet(
+        wallet_id,
+        name,
+        variant,
+        &device.model(),
+        trezor_connect::TREZOR_CONVENTION,
+        Vec::new(),
+    )
 }
 
 // All wallets are imported as single-sig wallet by default.
@@ -1368,9 +1391,26 @@ fn main() -> Result<(), String> {
             variant,
             keychain,
             fido2,
+            trezor,
         } => {
             let variant = parse_variant(&variant)?;
+            if trezor && (keychain || fido2) {
+                return Err("Cannot use --trezor with --keychain or --fido2.".to_string());
+            }
             let (wallet_id, name) = prepare_new_wallet(&cli.wallet)?;
+
+            // A Trezor wallet keeps no seed here, so it skips the seed steps.
+            if trezor {
+                println!(
+                    "Initializing Trezor wallet '{}' with variant: {}",
+                    name, variant
+                );
+                init_with_trezor(wallet_id, &name, variant)?;
+                println!("✓ Trezor wallet created");
+                println!("Run 'account new' to add its first account from the device");
+                return Ok(());
+            }
+
             let vault = KeyVault::new(variant, wallet_id);
 
             println!("Initializing wallet '{}' with variant: {}", name, variant);
