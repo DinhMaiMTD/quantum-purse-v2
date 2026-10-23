@@ -347,6 +347,10 @@ impl KeyVault {
     ///
     /// **Returns**:
     /// - The new multisig account on success, or an error on failure.
+    ///
+    /// Refused on a Trezor wallet: its firmware only signs for the device's
+    /// own single-sig accounts, so a multisig with it as a signer could hold
+    /// funds this wallet can never spend.
     pub fn gen_multisig_account(
         wallet_id: u32,
         singlesig_lock_args: &str,
@@ -354,6 +358,12 @@ impl KeyVault {
         threshold: u8,
         required_first_n: u8,
     ) -> Result<SphincsPlusAccount, String> {
+        if let AuthMethod::Trezor { .. } = Self::read_wallet_info(wallet_id)?.auth_method {
+            return Err(
+                "Creating a multisig account on a Trezor wallet is not supported yet.".to_string(),
+            );
+        }
+
         let singlesig = db::get_singlesig_account(wallet_id, singlesig_lock_args)
             .map_err(|e| e.to_string())?
             .ok_or_else(|| {
