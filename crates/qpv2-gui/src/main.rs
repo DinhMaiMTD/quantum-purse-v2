@@ -424,6 +424,8 @@ impl App {
         let qp_client = QpClient::new(node_config.clone());
 
         let startup_status = match local_node.spawn() {
+            // The cover's NODING boot line says it; errors still show here.
+            Ok(()) if screen == Screen::Locked => Status::None,
             Ok(()) => {
                 if local_node.has_local_process() {
                     Status::Info("Local blockchain node started.".to_string())

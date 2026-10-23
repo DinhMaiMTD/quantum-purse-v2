@@ -340,28 +340,59 @@ fn draw_finale(
 }
 
 /// A short run of light along the ∞, its head `head` (0 to 1) of the way
-/// round, with a fading tail.
+/// round, with a fading tail. It slides along the diagonals as smoothly as
+/// round the rings, and goes under "\" where "/" does.
 fn light_run(painter: &egui::Painter, layout: &QpMarkLayout, colors: &AppColors, head: f32) {
     const TAIL: f32 = 0.24;
     let path = qp_infinity_points();
     let n = path.len();
-    let mut along = Vec::with_capacity(n + 1);
-    along.push(0.0);
+    let dist = |a: (f32, f32), b: (f32, f32)| ((b.0 - a.0).powi(2) + (b.1 - a.1).powi(2)).sqrt();
+    let lerp =
+        |a: (f32, f32), b: (f32, f32), s: f32| (a.0 + (b.0 - a.0) * s, a.1 + (b.1 - a.1) * s);
+    // How far either side of "\", measured straight down (y - x), "/" is
+    // hidden: the "\" stroke plus the weave gap beside it. Read from the
+    // gap the logo is drawn with, whose top corner sits at the crossing.
+    let cover = -qp_mark_parts(layout.unit, painter.pixels_per_point()).gaps[0][0].1;
+
+    // Each diagonal is a single piece of the path. Cut them into steps as
+    // short as the rings', so the light slides through the middle instead of
+    // a whole diagonal lighting at once, and cut "/" where "\" covers it.
+    let step = dist(path[0], path[1]);
+    let mut pieces = Vec::new();
     for j in 0..n {
         let (a, b) = (path[j], path[(j + 1) % n]);
-        along.push(along[j] + ((b.0 - a.0).powi(2) + (b.1 - a.1).powi(2)).sqrt());
+        let count = (dist(a, b) / step).round().max(1.0) as usize;
+        let mut cuts: Vec<f32> = (0..=count).map(|k| k as f32 / count as f32).collect();
+        // "/" joins the end of the left ring to the start of the right one.
+        let under = j == n / 2 - 1;
+        // Along "/", the height above "\" changes linearly.
+        let (da, db) = (a.1 - a.0, b.1 - b.0);
+        if under {
+            cuts.extend([(-cover - da) / (db - da), (cover - da) / (db - da)]);
+            cuts.sort_by(f32::total_cmp);
+        }
+        for w in cuts.windows(2) {
+            let mid = (w[0] + w[1]) / 2.0;
+            let hidden = under && (da + (db - da) * mid).abs() < cover;
+            pieces.push((lerp(a, b, w[0]), lerp(a, b, w[1]), hidden));
+        }
     }
-    let total = along[n];
+
+    let mut along = Vec::with_capacity(pieces.len() + 1);
+    along.push(0.0);
+    for (i, &(a, b, _)) in pieces.iter().enumerate() {
+        along.push(along[i] + dist(a, b));
+    }
+    let total = along[pieces.len()];
     // Run the head past the end so the tail leaves the loop too.
     let head = head * (1.0 + TAIL);
-    for j in 0..n {
-        let behind = head - (along[j] + along[j + 1]) / 2.0 / total;
-        if !(0.0..TAIL).contains(&behind) {
+    for (i, &(a, b, hidden)) in pieces.iter().enumerate() {
+        let behind = head - (along[i] + along[i + 1]) / 2.0 / total;
+        if hidden || !(0.0..TAIL).contains(&behind) {
             continue;
         }
         let f = 1.0 - behind / TAIL;
         let color = mix(colors.accent, Color32::WHITE, f).gamma_multiply(f * f);
-        let (a, b) = (path[j], path[(j + 1) % n]);
         painter.line_segment(
             [layout.point(a.0, a.1), layout.point(b.0, b.1)],
             Stroke::new(layout.unit * (0.45 + 0.4 * f), color),

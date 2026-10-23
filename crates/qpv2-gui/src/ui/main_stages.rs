@@ -702,6 +702,22 @@ impl App {
             .map(|cw| format!("SPHINCS+ {}", cw.spx_variant))
             .unwrap_or_else(|| "SPHINCS+".to_string());
 
+        // Every stop of a local node is followed by a fresh start, except the
+        // watchdog's after a crash, so a local backend with no process is one
+        // that failed to start (`poll_local_node_liveness`).
+        let node_name = match self.qp_client.config().node_type {
+            NodeType::LightClient => "LIGHT CLIENT",
+            NodeType::FullNode => "FULL NODE",
+            NodeType::PublicRpc => "REMOTE RPC",
+        };
+        let noding = if self.qp_client.config().node_type == NodeType::PublicRpc {
+            format!("USING {}", node_name)
+        } else if self.local_node.has_local_process() {
+            format!("STARTED {}", node_name)
+        } else {
+            format!("FAILED TO START {}", node_name)
+        };
+
         ui.vertical_centered(|ui| {
             // Centre the mark and panel vertically, using the height they took
             // last frame; the status line hangs below and is left out, so a
@@ -753,9 +769,11 @@ impl App {
                                         &format!(
                                             "> WALLET ......... {}\n\
                                              > SCHEME ......... {}\n\
-                                             > STATUS ......... LOCKED",
+                                             > STATUS ......... LOCKED\n\
+                                             > NODING ......... {}",
                                             self.wallet_name.to_uppercase(),
                                             variant,
+                                            noding,
                                         ),
                                         90.0,
                                         11.5,
