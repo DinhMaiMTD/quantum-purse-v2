@@ -139,6 +139,14 @@ impl ThpSession {
         Ok(ThpSession { client })
     }
 
+    /// The device's internal model code (e.g. "T3W1"), from the properties it
+    /// sent when the channel opened.
+    pub(crate) fn internal_model(&self) -> Option<String> {
+        ThpDeviceProperties::parse_from_bytes(&self.client.device_properties)
+            .ok()
+            .map(|props| props.internal_model().to_string())
+    }
+
     /// Send a CKB protobuf message (by wire type id) and return the reply's
     /// type id + bytes. `ButtonRequest`s are auto-acknowledged.
     pub(crate) fn call_ckb(

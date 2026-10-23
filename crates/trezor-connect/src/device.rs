@@ -189,9 +189,22 @@ fn open_transport(
 }
 
 impl TrezorSession {
-    /// Display label for the connected device.
+    /// Display label for the connected device: its product name, looked up
+    /// from the internal model code it reports when the channel opens. The
+    /// names are the firmware's own (`MODEL_FULL_NAME` in
+    /// `vendor/trezor-firmware/core/embed/models/*/model_*.h`); a code not
+    /// listed shows as itself rather than as a guessed name.
     pub fn model(&self) -> String {
-        "Trezor Safe".to_string()
+        match self.session.internal_model().as_deref() {
+            Some("T2B1" | "T3B1") => "Trezor Safe 3".to_string(),
+            Some("T3T1") => "Trezor Safe 5".to_string(),
+            Some("T3W1") => "Trezor Safe 7".to_string(),
+            Some("T2T1") => "Trezor Model T".to_string(),
+            Some("D001") => "Trezor DIY 1".to_string(),
+            Some("D002") => "Trezor DIY 2".to_string(),
+            Some(code) => format!("Trezor {}", code),
+            None => "Trezor".to_string(),
+        }
     }
 
     /// Export a SPHINCS+ address for `account_index` under `variant`. The
