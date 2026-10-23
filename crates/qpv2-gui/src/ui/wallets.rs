@@ -8,8 +8,8 @@ use qpv2_core::KeyVault;
 use super::accounts::{header_cell, table_rule};
 use super::utils::truncate_middle;
 use super::utils::{
-    auth_badge_label, badge, breathing_dot, device_waiting_line, ghost_button, hold_button,
-    panel_frame, row_hover, section_header, FIDO2_WAITING_TEXT,
+    auth_badge_label, badge, breathing_dot, fido2_waiting_line, ghost_button, hold_button,
+    panel_frame, row_hover, section_header,
 };
 use crate::types::{display_font, label_font, Status};
 use crate::App;
@@ -103,7 +103,7 @@ impl App {
                     });
                     if self.fido2_export_rx.is_some() {
                         ui.add_space(8.0);
-                        device_waiting_line(ui, &self.colors, FIDO2_WAITING_TEXT);
+                        fido2_waiting_line(ui, &self.colors);
                     }
                     ui.add_space(10.0);
 

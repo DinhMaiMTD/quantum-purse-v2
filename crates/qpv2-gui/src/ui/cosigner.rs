@@ -8,8 +8,7 @@ use qpv2_core::types::AuthMethod;
 
 use crate::types::{label_font, AppColors, TransactionStatus};
 use crate::ui::utils::{
-    device_waiting_line, ghost_button, panel_frame, section_header, SectionCounter,
-    FIDO2_WAITING_TEXT,
+    fido2_waiting_line, ghost_button, panel_frame, section_header, SectionCounter,
 };
 use crate::App;
 
@@ -474,7 +473,7 @@ impl App {
                     }
                     if self.fido2_cosign_rx.is_some() {
                         ui.add_space(8.0);
-                        device_waiting_line(ui, &self.colors, FIDO2_WAITING_TEXT);
+                        fido2_waiting_line(ui, &self.colors);
                     }
                 }
                 Err(e) => {

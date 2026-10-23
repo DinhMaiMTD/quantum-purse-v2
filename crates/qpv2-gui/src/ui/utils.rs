@@ -169,7 +169,7 @@ impl App {
                     Some(qpv2_core::types::AuthMethod::Fido2 { .. })
                 ) {
                     ui.add_space(4.0);
-                    device_waiting_line(ui, c, FIDO2_WAITING_TEXT);
+                    fido2_waiting_line(ui, c);
                 }
             }
             TransactionStatus::AwaitingCoSigners {
@@ -743,7 +743,7 @@ pub(crate) const TREZOR_WAITING_TEXT: &str = "Follow the instructions on your Tr
 /// What a pending security-key setup or new account asks of the user. Shared
 /// by wallet setup and the accounts panel.
 pub(crate) const FIDO2_WAITING_TEXT: &str =
-    "Touch your security key when it blinks, or follow its screen.";
+    "Touch your FIDO2 key when it blinks, or follow its screen.";
 
 /// The line shown under the create buttons while a Trezor connect or a
 /// security-key setup waits on the device, which is where the user has to
@@ -765,6 +765,44 @@ pub(crate) fn device_waiting_line(ui: &mut egui::Ui, colors: &AppColors, text: &
                 .font(label_font(10.0))
                 .color(attention),
         );
+    });
+}
+
+/// The waiting line for a security-key request, ending in a `[ CANCEL ]` that
+/// stops the key's wait. It appears only while the key itself waits; the PIN
+/// dialog before that has its own. A key has no screen to decline on, so
+/// without this the only ways out would be the key's own timeout or
+/// unplugging it.
+pub(crate) fn fido2_waiting_line(ui: &mut egui::Ui, colors: &AppColors) {
+    ui.horizontal(|ui| {
+        device_waiting_line(ui, colors, FIDO2_WAITING_TEXT);
+        if !keychain::fido2::cancellable() {
+            return;
+        }
+        // Bracketed text rather than a framed button, which read as a second
+        // main action beside the panel's own. Muted until hovered, so the
+        // instruction stays the line's only warm colour.
+        ui.add_space(6.0);
+        let galley = ui.painter().layout_no_wrap(
+            "[ CANCEL ]".to_string(),
+            label_font(10.0),
+            egui::Color32::PLACEHOLDER,
+        );
+        let (rect, response) = ui.allocate_exact_size(galley.size(), egui::Sense::click());
+        let color = if response.hovered() {
+            colors.warn
+        } else {
+            colors.text_muted
+        };
+        ui.painter().galley(rect.min, galley, color);
+        if response
+            .on_hover_cursor(egui::CursorIcon::PointingHand)
+            .clicked()
+        {
+            if let Err(e) = keychain::fido2::cancel() {
+                tracing::error!("{}", e);
+            }
+        }
     });
 }
 

@@ -4,9 +4,9 @@
 use eframe::egui;
 
 use super::utils::{
-    badge, ckb_split, device_waiting_line, extract_ar, format_duration_ms, ghost_button,
-    panel_frame, pin_popup_above_modal, row_hover, section_header, truncate_middle,
-    FIDO2_WAITING_TEXT, TREZOR_WAITING_TEXT,
+    badge, ckb_split, device_waiting_line, extract_ar, fido2_waiting_line, format_duration_ms,
+    ghost_button, panel_frame, pin_popup_above_modal, row_hover, section_header, truncate_middle,
+    TREZOR_WAITING_TEXT,
 };
 use crate::types::{display_font, label_font, AppColors, DaoView, Status, TransactionStatus};
 use crate::utils::{format_ckb, format_ckb_balance};
@@ -579,7 +579,7 @@ impl App {
                                 ) =>
                             {
                                 ui.add_space(8.0);
-                                device_waiting_line(ui, &self.colors, FIDO2_WAITING_TEXT);
+                                fido2_waiting_line(ui, &self.colors);
                             }
                             _ => {}
                         }

@@ -9,8 +9,8 @@ use qpv2_core::types::{SingleSigConvention, SpxVariant};
 
 use crate::types::{label_font, WalletModal};
 use crate::ui::utils::{
-    device_waiting_line, ghost_button, pin_popup_above_modal, section_header, v1_import_checkbox,
-    SectionCounter, FIDO2_WAITING_TEXT, TREZOR_WAITING_TEXT,
+    device_waiting_line, fido2_waiting_line, ghost_button, pin_popup_above_modal, section_header,
+    v1_import_checkbox, SectionCounter, TREZOR_WAITING_TEXT,
 };
 use crate::App;
 
@@ -327,16 +327,12 @@ impl App {
             }
         });
         // Outside the group so it isn't greyed out with the buttons.
-        let waiting_on = if self.trezor_connect_rx.is_some() {
-            Some(TREZOR_WAITING_TEXT)
-        } else if self.fido2_connect_rx.is_some() {
-            Some(FIDO2_WAITING_TEXT)
-        } else {
-            None
-        };
-        if let Some(text) = waiting_on {
+        if self.trezor_connect_rx.is_some() {
             ui.add_space(8.0);
-            device_waiting_line(ui, &self.colors, text);
+            device_waiting_line(ui, &self.colors, TREZOR_WAITING_TEXT);
+        } else if self.fido2_connect_rx.is_some() {
+            ui.add_space(8.0);
+            fido2_waiting_line(ui, &self.colors);
         }
 
         picked

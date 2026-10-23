@@ -4,8 +4,8 @@ use eframe::egui;
 use qpv2_core::KeyVault;
 
 use super::utils::{
-    accent_button, auth_badge_label, badge, ckb_split, device_waiting_line, ghost_button,
-    panel_frame, row_hover, section_header, truncate_middle, FIDO2_WAITING_TEXT,
+    accent_button, auth_badge_label, badge, ckb_split, device_waiting_line, fido2_waiting_line,
+    ghost_button, panel_frame, row_hover, section_header, truncate_middle, FIDO2_WAITING_TEXT,
     TREZOR_WAITING_TEXT,
 };
 use crate::types::{display_font, label_font, AppColors, Status};
@@ -151,7 +151,10 @@ impl App {
                             self.create_singlesig_account();
                         }
                     });
-                    if let Some(text) = waiting_on {
+                    if self.fido2_new_account_rx.is_some() {
+                        ui.add_space(8.0);
+                        fido2_waiting_line(ui, &self.colors);
+                    } else if let Some(text) = waiting_on {
                         ui.add_space(8.0);
                         device_waiting_line(ui, &self.colors, text);
                     }

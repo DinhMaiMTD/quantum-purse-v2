@@ -15,11 +15,18 @@ use ctap_hid_fido2::fidokey::make_credential::Extension as Mext;
 use ctap_hid_fido2::fidokey::GetAssertionArgsBuilder;
 use ctap_hid_fido2::fidokey::MakeCredentialArgsBuilder;
 use ctap_hid_fido2::public_key_credential_user_entity::PublicKeyCredentialUserEntity;
-use ctap_hid_fido2::{get_fidokey_devices, FidoKeyHidFactory, HidInfo, LibCfg};
+use ctap_hid_fido2::{get_fidokey_devices, FidoKeyHid, FidoKeyHidFactory, HidInfo, LibCfg};
 use qpv2_core::{utilities, SecureString, SecureVec};
+use std::sync::{Arc, Mutex, MutexGuard};
 use zeroize::Zeroize;
 
 const RP_ID: &str = "quantumpurse.org";
+
+/// The open USB connection to the security key while a request waits on the
+/// user, kept where [`cancel`] can reach it from another thread; empty
+/// between requests. One at a time: a second request would reach the key
+/// while it waits for the first one's touch, so callers send them one by one.
+static USB_CONNECTION: Mutex<Option<Arc<FidoKeyHid>>> = Mutex::new(None);
 
 /// Fixed 32-byte salt for hmac-secret. Derived conceptually from
 /// "quantum-purse-v2/fido2/hmac-salt/v1" but hardcoded to avoid
@@ -145,9 +152,9 @@ pub fn register(verification: &Verification, label: &str) -> Result<Fido2Credent
         Verification::OnDevice => builder.build(),
     };
 
-    let attestation = device
-        .make_credential_with_args(&args)
-        .map_err(|e| map_err_for(verification, e))?;
+    let attestation = run_cancellable_request(device, verification, |device| {
+        device.make_credential_with_args(&args)
+    })?;
 
     Ok(Fido2Credential {
         credential_id: attestation.credential_descriptor.id,
@@ -185,9 +192,9 @@ pub fn authenticate(
         Verification::OnDevice => builder.build(),
     };
 
-    let assertions = device
-        .get_assertion_with_args(&args)
-        .map_err(|e| map_err_for(verification, e))?;
+    let assertions = run_cancellable_request(device, verification, |device| {
+        device.get_assertion_with_args(&args)
+    })?;
     let assertion = assertions
         .into_iter()
         .next()
@@ -217,6 +224,45 @@ pub fn authenticate(
     Ok(secure)
 }
 
+/// True while a request waits on the user, for a touch or for the key's own
+/// screen, keypad or sensor, so [`cancel`] can stop it. A caller shows its
+/// Cancel only then; the PIN dialog before it has its own.
+pub fn cancellable() -> bool {
+    usb_connection().is_some()
+}
+
+/// Stops the request that is waiting on the user, if any: the key stops
+/// blinking and answers the request with `CTAP2_ERR_KEEPALIVE_CANCEL`, which
+/// its thread reports as "Cancelled.". Returns once the cancel has been sent.
+pub fn cancel() -> Result<(), String> {
+    let Some(device) = usb_connection().clone() else {
+        return Ok(());
+    };
+    // CTAPHID_CANCEL on the request's channel. The library names it after
+    // its selection command, but it cancels whatever request is pending.
+    device
+        .cancel_selection()
+        .map_err(|e| format!("Could not cancel the security key's request: {}", e))
+}
+
+/// Runs `request`, which waits on the user, where [`cancel`] can stop it.
+fn run_cancellable_request<T, E: std::fmt::Display>(
+    device: FidoKeyHid,
+    verification: &Verification,
+    request: impl FnOnce(&FidoKeyHid) -> Result<T, E>,
+) -> Result<T, String> {
+    let device = Arc::new(device);
+    *usb_connection() = Some(Arc::clone(&device));
+    let result = request(&device);
+    *usb_connection() = None;
+    result.map_err(|e| map_err_for(verification, e))
+}
+
+fn usb_connection() -> MutexGuard<'static, Option<Arc<FidoKeyHid>>> {
+    // A panic while this was locked leaves nothing half-written in it.
+    USB_CONNECTION.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 fn rand_challenge() -> Result<[u8; 32], String> {
     let bytes = utilities::get_random_bytes(32).map_err(|e| e.to_string())?;
     let mut buf = [0u8; 32];
@@ -239,12 +285,14 @@ fn map_err_for(verification: &Verification, e: impl std::fmt::Display) -> String
 }
 
 /// Error translation table.
-const ERR_MSGS: [(&str, &str); 5] = [
+const ERR_MSGS: [(&str, &str); 6] = [
     (
         "CTAP2_ERR_OPERATION_DENIED",
         "The security key wasn't touched in time, or the request was declined on it. \
          Try again and touch it when it blinks.",
     ),
+    // The key's answer to a request stopped by `cancel`.
+    ("CTAP2_ERR_KEEPALIVE_CANCEL", "Cancelled."),
     ("CTAP2_ERR_PIN_INVALID", "Wrong PIN."),
     // Three wrong PINs in a row: the key refuses PINs until it is power-cycled.
     (
