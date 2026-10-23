@@ -71,6 +71,16 @@ pub fn init_usb_on_main_thread() {
     }
 }
 
+/// The library's settings, with its own touch prompt turned off: it prints a
+/// fixed, plain line to stdout whenever the key waits, which callers can't
+/// style or place. Callers say what to do themselves (the CLI on the
+/// terminal, the app on screen).
+fn lib_cfg() -> LibCfg {
+    let mut cfg = LibCfg::init();
+    cfg.enable_keep_alive_msg = false;
+    cfg
+}
+
 /// Keys only have to accept names this long; longer ones may be refused.
 const LABEL_MAX_BYTES: usize = 64;
 
@@ -83,7 +93,7 @@ const LABEL_MAX_BYTES: usize = 64;
 /// token flow the library lacks, and the PIN path is the one proven to work.
 /// On-device is used only where it is the key's sole method, as on a Trezor.
 pub fn needs_host_pin() -> Result<bool, String> {
-    let cfg = LibCfg::init();
+    let cfg = lib_cfg();
     let device = FidoKeyHidFactory::create(&cfg).map_err(map_err)?;
     let info = device.get_info().map_err(map_err)?;
     // Present and enabled is `Some(true)`; present but off is `Some(false)`.
@@ -118,7 +128,7 @@ pub fn needs_host_pin() -> Result<bool, String> {
 ///
 /// Returns the credential ID to persist in `meta.json`.
 pub fn register(verification: &Verification, label: &str) -> Result<Fido2Credential, String> {
-    let cfg = LibCfg::init();
+    let cfg = lib_cfg();
     let device = FidoKeyHidFactory::create(&cfg).map_err(map_err)?;
 
     let challenge = rand_challenge()?;
@@ -162,7 +172,7 @@ pub fn authenticate(
     credential_id: &[u8],
     verification: &Verification,
 ) -> Result<SecureVec, String> {
-    let cfg = LibCfg::init();
+    let cfg = lib_cfg();
     let device = FidoKeyHidFactory::create(&cfg).map_err(map_err)?;
 
     let challenge = rand_challenge()?;

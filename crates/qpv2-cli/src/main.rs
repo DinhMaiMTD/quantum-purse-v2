@@ -415,6 +415,7 @@ fn resolve_auth_key(wallet_id: u32, purpose: &str) -> Result<AuthKey, String> {
             let cred_bytes =
                 hex::decode(credential_id).map_err(|e| format!("Invalid credential ID: {}", e))?;
             let verification = fido2_verification(purpose)?;
+            fido2_cue(&verification, "Unlocking the wallet");
             let hmac_output = keychain::fido2::authenticate(&cred_bytes, &verification)?;
             let key = qpv2_core::utilities::derive_vault_enc_key(&hmac_output)?;
             Ok(AuthKey::CryptoKey(key))
@@ -473,11 +474,25 @@ fn fido2_verification(purpose: &str) -> Result<keychain::fido2::Verification, St
 fn fido2_cue(verification: &keychain::fido2::Verification, step: &str) {
     match verification {
         keychain::fido2::Verification::OnDevice => {
-            println!("{} — confirm on your security key...", step)
+            device_cue(&format!("{} — confirm on your security key...", step))
         }
         keychain::fido2::Verification::OnHost(_) => {
-            println!("{} — touch your security key...", step)
+            device_cue(&format!("{} — touch your security key...", step))
         }
+    }
+}
+
+/// Prints a line asking the user to act on a device (a security key or a
+/// Trezor), in yellow so it stands out from the progress lines around it.
+/// Plain when the output is not a terminal or `NO_COLOR` is set, and on
+/// Windows, whose classic console prints the colour codes as text unless a
+/// program switches them on.
+fn device_cue(text: &str) {
+    use std::io::IsTerminal;
+    if cfg!(not(windows)) && io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none() {
+        println!("\x1b[33m{}\x1b[0m", text);
+    } else {
+        println!("{}", text);
     }
 }
 
@@ -502,7 +517,7 @@ fn init_with_fido2(vault: &KeyVault, name: &str) -> Result<(), String> {
 fn init_with_trezor(wallet_id: u32, name: &str, variant: SpxVariant) -> Result<(), String> {
     // Connecting can wait on the device: its PIN, a "Connect?" confirm, or a
     // pairing code to type here. Say where to look, as the app does.
-    println!("Follow the instructions on your Trezor's screen...");
+    device_cue("Follow the instructions on your Trezor's screen...");
     let device = trezor_connect::open(&mut trezor_connect::StdinPairing)
         .map_err(|e| format!("Could not connect to Trezor: {}", e))?;
     KeyVault::add_hw_watch_only_wallet(
@@ -973,7 +988,7 @@ fn sign_transfer_with_trezor(
     let variant = account.config.signers[0].variant;
     let sign_group: Vec<u32> = (0..unsigned_tx.inputs().len() as u32).collect();
 
-    println!("Confirm the transaction on your Trezor...");
+    device_cue("Confirm the transaction on your Trezor...");
     let mut device = trezor_connect::open(&mut trezor_connect::StdinPairing)
         .map_err(|e| format!("Could not connect to Trezor: {}", e))?;
     let signed = device
@@ -1015,7 +1030,10 @@ fn add_new_trezor_account(
     let variant = KeyVault::get_spx_variant(wallet_id)?;
     let index = KeyVault::get_singlesig_lock_args(wallet_id)?.len() as u32;
 
-    println!("Confirm the address of account {} on your Trezor...", index);
+    device_cue(&format!(
+        "Confirm the address of account {} on your Trezor...",
+        index
+    ));
     let mut device = trezor_connect::open(&mut trezor_connect::StdinPairing)
         .map_err(|e| format!("Could not connect to Trezor: {}", e))?;
     let account = device
@@ -1912,7 +1930,9 @@ fn main() -> Result<(), String> {
                             AuthMethod::Password => "Password".to_string(),
                             AuthMethod::Keychain => keychain::display_name().to_string(),
                             AuthMethod::Fido2 { .. } => "FIDO2".to_string(),
-                            AuthMethod::Trezor { ref model } => format!("Trezor ({model})"),
+                            // The model already names the device, e.g.
+                            // "Trezor Safe 7".
+                            AuthMethod::Trezor { ref model } => model.clone(),
                         };
 
                         println!("  [{}] {}", entry.id, entry.name);
