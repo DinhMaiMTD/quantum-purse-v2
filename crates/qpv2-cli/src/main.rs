@@ -410,10 +410,7 @@ fn resolve_auth_key(wallet_id: u32, purpose: &str) -> Result<AuthKey, String> {
             let key = qpv2_core::utilities::derive_vault_enc_key(&hmac_output)?;
             Ok(AuthKey::CryptoKey(key))
         }
-        AuthMethod::Trezor { .. } => Err(
-            "This is a Trezor (hardware) wallet; signing happens on the device, so this computer holds no key for it."
-                .to_string(),
-        ),
+        AuthMethod::Trezor { .. } => Err("Trezor key not available.".to_string()),
     }
 }
 

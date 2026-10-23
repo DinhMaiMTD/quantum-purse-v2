@@ -583,9 +583,16 @@ impl App {
                 self.balances.insert(account.lock_args.clone(), Some(0));
                 self.spendable_balances
                     .insert(account.lock_args.clone(), Some(0));
+                // A wallet's first account may hold history: an import whose
+                // first account failed opens empty, and this makes it.
+                let start = if self.accounts.is_empty() {
+                    StartingBlock::Detect
+                } else {
+                    StartingBlock::Tip
+                };
                 self.register_lock_scripts_with_light_client(
                     std::slice::from_ref(&account.lock_args),
-                    StartingBlock::Tip,
+                    start,
                 );
                 self.accounts.push(account);
                 self.refresh_wallet_cache();

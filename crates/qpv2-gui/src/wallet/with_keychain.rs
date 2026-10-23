@@ -51,13 +51,9 @@ impl App {
             return;
         }
 
-        if let Err(e) = vault.gen_singlesig_account(AuthKey::CryptoKey(key_for_account)) {
-            let msg = format!("Failed to create first account: {}", e);
-            tracing::error!("{}", msg);
-            self.status = Status::Error(msg);
-            self.auth_method = Some(AuthMethod::Keychain);
-            return;
-        }
+        // The wallet exists now, so it opens even if this fails: empty, for
+        // NEW ACCOUNT to retry.
+        let first_account = vault.gen_singlesig_account(AuthKey::CryptoKey(key_for_account));
 
         self.finalize_wallet_setup(
             AuthMethod::Keychain,
@@ -66,6 +62,14 @@ impl App {
             wallet_name,
             StartingBlock::Tip,
         );
+        if let Err(e) = first_account {
+            let msg = format!(
+                "Failed to create first account: {}. Press NEW ACCOUNT to retry.",
+                e.to_string().trim_end_matches('.')
+            );
+            tracing::error!("{}", msg);
+            self.status = Status::Error(msg);
+        }
     }
 
     pub(crate) fn import_seed_phrase_with_keychain(
@@ -124,13 +128,9 @@ impl App {
             return;
         }
 
-        if let Err(e) = vault.gen_singlesig_account(AuthKey::CryptoKey(key_for_account)) {
-            let msg = format!("Failed to create first account: {}", e);
-            tracing::error!("{}", msg);
-            self.status = Status::Error(msg);
-            self.auth_method = Some(AuthMethod::Keychain);
-            return;
-        }
+        // The wallet exists now, so it opens even if this fails: empty, for
+        // NEW ACCOUNT to retry.
+        let first_account = vault.gen_singlesig_account(AuthKey::CryptoKey(key_for_account));
 
         self.finalize_wallet_setup(
             AuthMethod::Keychain,
@@ -139,5 +139,13 @@ impl App {
             wallet_name,
             StartingBlock::Detect,
         );
+        if let Err(e) = first_account {
+            let msg = format!(
+                "Failed to create first account: {}. Press NEW ACCOUNT to retry.",
+                e.to_string().trim_end_matches('.')
+            );
+            tracing::error!("{}", msg);
+            self.status = Status::Error(msg);
+        }
     }
 }

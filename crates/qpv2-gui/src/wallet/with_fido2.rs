@@ -109,7 +109,7 @@ impl App {
 
         let vault = KeyVault::new(variant, wallet_id);
         if let Err(e) =
-            vault.generate_master_seed(AuthKey::CryptoKey(key), auth_method.clone(), &wallet_name)
+            vault.generate_master_seed(AuthKey::CryptoKey(key), auth_method, &wallet_name)
         {
             let msg = format!("Failed to create wallet: {}", e);
             tracing::error!("{}", msg);
@@ -117,13 +117,9 @@ impl App {
             return;
         }
 
-        if let Err(e) = vault.gen_singlesig_account(AuthKey::CryptoKey(key_for_account)) {
-            let msg = format!("Failed to create first account: {}", e);
-            tracing::error!("{}", msg);
-            self.status = Status::Error(msg);
-            self.auth_method = Some(auth_method);
-            return;
-        }
+        // The wallet exists now, so it opens even if this fails: empty, for
+        // NEW ACCOUNT to retry.
+        let first_account = vault.gen_singlesig_account(AuthKey::CryptoKey(key_for_account));
 
         self.finalize_wallet_setup(
             AuthMethod::Fido2 { credential_id },
@@ -132,6 +128,14 @@ impl App {
             wallet_name,
             StartingBlock::Tip,
         );
+        if let Err(e) = first_account {
+            let msg = format!(
+                "Failed to create first account: {}. Press NEW ACCOUNT to retry.",
+                e.to_string().trim_end_matches('.')
+            );
+            tracing::error!("{}", msg);
+            self.status = Status::Error(msg);
+        }
     }
 
     /// Import a seed phrase into a FIDO2-authenticated wallet: asks for the
@@ -230,7 +234,7 @@ impl App {
         if let Err(e) = vault.import_seed_phrase(
             seed_phrase,
             AuthKey::CryptoKey(key),
-            auth_method.clone(),
+            auth_method,
             &wallet_name,
             single_sig_convention,
         ) {
@@ -240,13 +244,9 @@ impl App {
             return;
         }
 
-        if let Err(e) = vault.gen_singlesig_account(AuthKey::CryptoKey(key_for_account)) {
-            let msg = format!("Failed to create first account: {}", e);
-            tracing::error!("{}", msg);
-            self.status = Status::Error(msg);
-            self.auth_method = Some(auth_method);
-            return;
-        }
+        // The wallet exists now, so it opens even if this fails: empty, for
+        // NEW ACCOUNT to retry.
+        let first_account = vault.gen_singlesig_account(AuthKey::CryptoKey(key_for_account));
 
         // The other import buttons clear this at the click; this one keeps
         // it for a retry until the wallet exists.
@@ -258,6 +258,14 @@ impl App {
             wallet_name,
             StartingBlock::Detect,
         );
+        if let Err(e) = first_account {
+            let msg = format!(
+                "Failed to create first account: {}. Press NEW ACCOUNT to retry.",
+                e.to_string().trim_end_matches('.')
+            );
+            tracing::error!("{}", msg);
+            self.status = Status::Error(msg);
+        }
     }
 
     /// Start creating the next account of a FIDO2 wallet. The PIN dialog and
@@ -323,9 +331,16 @@ impl App {
                 self.balances.insert(account.lock_args.clone(), Some(0));
                 self.spendable_balances
                     .insert(account.lock_args.clone(), Some(0));
+                // A wallet's first account may hold history: an import whose
+                // first account failed opens empty, and this makes it.
+                let start = if self.accounts.is_empty() {
+                    StartingBlock::Detect
+                } else {
+                    StartingBlock::Tip
+                };
                 self.register_lock_scripts_with_light_client(
                     std::slice::from_ref(&account.lock_args),
-                    StartingBlock::Tip,
+                    start,
                 );
                 self.accounts.push(account);
                 self.refresh_wallet_cache();
