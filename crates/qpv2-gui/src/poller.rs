@@ -28,10 +28,16 @@ impl App {
                 self.tx_status = TransactionStatus::AwaitingSignature;
 
                 match &self.auth_method {
-                    Some(AuthMethod::Password)
-                    | Some(AuthMethod::Keychain)
-                    | Some(AuthMethod::Fido2 { .. }) => {
-                        self.sign_and_send(kind, unsigned_tx, input_cells, lock_args);
+                    Some(AuthMethod::Password) | Some(AuthMethod::Keychain) => {
+                        self.sign_and_broadcast(kind, unsigned_tx, input_cells, lock_args);
+                    }
+                    Some(AuthMethod::Fido2 { .. }) => {
+                        self.sign_and_broadcast_with_fido2(
+                            kind,
+                            unsigned_tx,
+                            input_cells,
+                            lock_args,
+                        );
                     }
                     Some(AuthMethod::Trezor { .. }) => {
                         self.delegate_trezor_sign_and_send(
@@ -705,6 +711,90 @@ impl App {
             Err(mpsc::TryRecvError::Disconnected) => {
                 self.fido2_new_account_rx = None;
                 let msg = "FIDO2 account thread terminated unexpectedly.".to_string();
+                tracing::error!("{}", msg);
+                self.status = Status::Error(msg);
+            }
+        }
+    }
+
+    /// Pick up the transaction signed by `sign_and_broadcast_with_fido2` and act
+    /// on it.
+    pub(crate) fn poll_fido2_sign(&mut self) {
+        let rx = match &self.fido2_sign_rx {
+            Some(rx) => rx,
+            None => return,
+        };
+
+        match rx.try_recv() {
+            Ok((kind, Ok(signed))) => {
+                self.fido2_sign_rx = None;
+                self.forward_signed_tx(kind, signed);
+            }
+            Ok((_, Err(e))) => {
+                self.fido2_sign_rx = None;
+                tracing::error!("{}", e);
+                self.tx_status = TransactionStatus::Error(e);
+            }
+            Err(mpsc::TryRecvError::Empty) => {}
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.fido2_sign_rx = None;
+                let msg = "FIDO2 signing thread terminated unexpectedly.".to_string();
+                tracing::error!("{}", msg);
+                self.tx_status = TransactionStatus::Error(msg);
+            }
+        }
+    }
+
+    /// Pick up the co-signer response produced by `co_sign_with_fido2` and
+    /// show it.
+    pub(crate) fn poll_fido2_cosign(&mut self) {
+        let rx = match &self.fido2_cosign_rx {
+            Some(rx) => rx,
+            None => return,
+        };
+
+        match rx.try_recv() {
+            Ok(Ok(response)) => {
+                self.fido2_cosign_rx = None;
+                self.show_cosign_response(response);
+            }
+            Ok(Err(e)) => {
+                self.fido2_cosign_rx = None;
+                tracing::error!("{}", e);
+                self.status = Status::Error(e);
+            }
+            Err(mpsc::TryRecvError::Empty) => {}
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.fido2_cosign_rx = None;
+                let msg = "FIDO2 co-signing thread terminated unexpectedly.".to_string();
+                tracing::error!("{}", msg);
+                self.status = Status::Error(msg);
+            }
+        }
+    }
+
+    /// Pick up the seed phrase decrypted by `export_seed_phrase_with_fido2`
+    /// and open the secure dialog with it.
+    pub(crate) fn poll_fido2_export(&mut self) {
+        let rx = match &self.fido2_export_rx {
+            Some(rx) => rx,
+            None => return,
+        };
+
+        match rx.try_recv() {
+            Ok(Ok(phrase)) => {
+                self.fido2_export_rx = None;
+                self.show_seed_phrase_dialog(phrase);
+            }
+            Ok(Err(e)) => {
+                self.fido2_export_rx = None;
+                tracing::error!("{}", e);
+                self.status = Status::Error(e);
+            }
+            Err(mpsc::TryRecvError::Empty) => {}
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.fido2_export_rx = None;
+                let msg = "FIDO2 seed export thread terminated unexpectedly.".to_string();
                 tracing::error!("{}", msg);
                 self.status = Status::Error(msg);
             }

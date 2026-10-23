@@ -321,6 +321,25 @@ pub(crate) type TrezorAccountCreate = Result<qpv2_core::types::SphincsPlusAccoun
 /// store the account with.
 pub(crate) type Fido2AccountCreate = Result<qpv2_core::types::AuthKey, String>;
 
+/// A transaction signed with the wallet key, for `forward_signed_tx`.
+pub(crate) enum SignedTx {
+    /// A single-sig transaction, ready to broadcast.
+    SingleSig(ckb_types::core::TransactionView),
+    /// A multisig transaction carrying this wallet's signature, waiting for
+    /// the co-signers'.
+    Multisig {
+        /// Boxed, as `TransactionStatus::AwaitingCoSigners` keeps it.
+        request: Box<qpv2_core::types::SigningRequest>,
+        unsigned_tx: ckb_types::core::TransactionView,
+        /// This wallet's position among the signers, and its signature.
+        signature: (usize, Vec<u8>),
+    },
+}
+
+/// Result of signing a transaction with the security key in the background:
+/// the transaction's kind, and the signed transaction or why it isn't.
+pub(crate) type Fido2SignResult = (TransactionKind, Result<SignedTx, String>);
+
 /// Application state machine.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Screen {

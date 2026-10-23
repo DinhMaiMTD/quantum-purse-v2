@@ -38,9 +38,9 @@ pub(crate) const QR_ADOPTION_RETRY: Duration = Duration::from_secs(300);
 
 use types::{
     AppColors, BalanceChartCache, BalanceResult, DaoQueryResult, DaoView, Fido2AccountCreate,
-    Fido2WalletUpdate, NodeStatus, NodeStatusUpdate, QrAdoptionUpdate, Screen, Series, Status, Tab,
-    TransactionKind, TransactionSendResult, TransactionStatus, TrezorAccountCreate,
-    TrezorConnectUpdate, TxBuildResult, TxHistoryEvent, TxRecord,
+    Fido2SignResult, Fido2WalletUpdate, NodeStatus, NodeStatusUpdate, QrAdoptionUpdate, Screen,
+    Series, Status, Tab, TransactionKind, TransactionSendResult, TransactionStatus,
+    TrezorAccountCreate, TrezorConnectUpdate, TxBuildResult, TxHistoryEvent, TxRecord,
 };
 
 pub(crate) struct App {
@@ -222,6 +222,12 @@ pub(crate) struct App {
     // The security-key counterpart of `trezor_new_account_rx`: Some(_) while the
     // PIN dialog is open or the key waits for a touch or an on-device confirm.
     pub(crate) fido2_new_account_rx: Option<mpsc::Receiver<Fido2AccountCreate>>,
+    // In-flight security-key jobs: each asks the key in the background, then
+    // signs, co-signs or decrypts the seed phrase. Some(_) while the PIN dialog
+    // is open or the key waits for a touch or an on-device confirm.
+    pub(crate) fido2_sign_rx: Option<mpsc::Receiver<Fido2SignResult>>,
+    pub(crate) fido2_cosign_rx: Option<mpsc::Receiver<Result<String, String>>>,
+    pub(crate) fido2_export_rx: Option<mpsc::Receiver<Result<qpv2_core::SecureString, String>>>,
     // How the seed-export thread tells the main UI thread it is done. Some while
     // that thread owns the pinentry dialog; the overlay locks the wallet meanwhile.
     pub(crate) seed_export_dialog_done_rx: Option<mpsc::Receiver<Result<(), String>>>,
@@ -526,6 +532,9 @@ impl App {
             fido2_connect_rx: None,
             trezor_new_account_rx: None,
             fido2_new_account_rx: None,
+            fido2_sign_rx: None,
+            fido2_cosign_rx: None,
+            fido2_export_rx: None,
             seed_export_dialog_done_rx: None,
             device_status: trezor_connect::DeviceStatus::Working,
             device_status_rx: None,
@@ -595,11 +604,14 @@ impl eframe::App for App {
         // move us off it (they can also start from the New Wallet dialog).
         self.poll_trezor_wallet_setup();
         self.poll_fido2_wallet_setup();
-        // Also not gated: a new account started before the wallet was hidden
-        // is stored as soon as the device answers. A security key's answer is
-        // the vault key, which must not wait in the channel behind the cover.
+        // Also not gated: a new account, signature, co-signature or seed
+        // export finishes as soon as the device answers. A security key's
+        // answer is a secret, which must not wait in the channel.
         self.poll_trezor_new_account();
         self.poll_fido2_new_account();
+        self.poll_fido2_sign();
+        self.poll_fido2_cosign();
+        self.poll_fido2_export();
 
         // Device link: probed on its own cadence, polled everywhere. Both are
         // no-ops unless the open wallet is device-backed.
@@ -702,6 +714,9 @@ impl eframe::App for App {
             || self.fido2_connect_rx.is_some()
             || self.trezor_new_account_rx.is_some()
             || self.fido2_new_account_rx.is_some()
+            || self.fido2_sign_rx.is_some()
+            || self.fido2_cosign_rx.is_some()
+            || self.fido2_export_rx.is_some()
             || self.seed_export_dialog_done_rx.is_some()
         {
             // A frame is what checks the channel, so the repaint rate is the

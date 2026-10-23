@@ -23,7 +23,7 @@ const RAIL_W: f32 = 138.0;
 /// target — but the wallet's sits in a right-to-left layout with nothing to its
 /// right to paint into, so it has to reserve this width to hold its place.
 const ARROW_W: f32 = 12.0;
-/// How long HOLD TO SHOW must be held. Short: the wallet is shown often, and
+/// How long HOLD TO UNLOCK must be held. Short: the wallet is shown often, and
 /// the hold only guards against showing it by accident.
 const SHOW_HOLD_SECS: f64 = 1.0;
 /// Gap between the cover's stage and its panel.

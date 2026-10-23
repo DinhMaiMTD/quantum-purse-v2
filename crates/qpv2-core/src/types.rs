@@ -233,7 +233,7 @@ pub struct SphincsPlusAccount {
     /// Lock script multisig configuration.
     pub config: MultisigConfig,
     /// For multisig accounts: the singlesig lock_args of the local signer
-    /// that was chosen when creating this account. Used by `sign_and_send`
+    /// that was chosen when creating this account. Used by `sign_transaction`
     /// to pick the correct key. `None` for singlesig accounts.
     #[serde(default)]
     pub initiating_signer_lock_args: Option<String>,

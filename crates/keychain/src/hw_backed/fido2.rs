@@ -228,14 +228,39 @@ fn map_err_for(verification: &Verification, e: impl std::fmt::Display) -> String
     map_err(msg)
 }
 
+/// Error translation table.
+const ERR_MSGS: [(&str, &str); 5] = [
+    (
+        "CTAP2_ERR_OPERATION_DENIED",
+        "The security key wasn't touched in time, or the request was declined on it. \
+         Try again and touch it when it blinks.",
+    ),
+    ("CTAP2_ERR_PIN_INVALID", "Wrong PIN."),
+    // Three wrong PINs in a row: the key refuses PINs until it is power-cycled.
+    (
+        "CTAP2_ERR_PIN_AUTH_BLOCKED",
+        "Too many wrong PINs in a row. Unplug the security key, plug it back in, and try again.",
+    ),
+    // Out of PIN retries: only a reset unblocks the key, and a reset deletes
+    // its credentials, this wallet's included.
+    (
+        "CTAP2_ERR_PIN_BLOCKED",
+        "The security key's PIN is blocked after too many wrong tries. Only a reset unblocks \
+         it, and a reset erases this wallet's credential, so you will need the seed phrase.",
+    ),
+    (
+        "CTAP2_ERR_NO_CREDENTIALS",
+        "This security key doesn't hold this wallet's credential. Plug in the key the wallet \
+         was created with.",
+    ),
+];
+
 fn map_err(e: impl std::fmt::Display) -> String {
     let msg = e.to_string();
-    if msg.contains("Cancelled") || msg.contains("cancel") {
-        "Cancelled.".to_string()
-    } else if msg.contains("PIN") && msg.contains("invalid") {
-        "PIN verification failed.".to_string()
-    } else if msg.contains("PIN") && msg.contains("locked") {
-        "Authenticator locked — too many PIN attempts.".to_string()
+    if let Some((_, said)) = ERR_MSGS.iter().find(|(code, _)| msg.contains(code)) {
+        said.to_string()
+    } else if msg.contains("Multiple FIDO devices") {
+        "More than one security key is plugged in. Unplug all but this wallet's key.".to_string()
     } else if msg.contains("not found") || msg.contains("No device") {
         "No FIDO2 security key detected. Is your device connected and unlocked?".to_string()
     } else {

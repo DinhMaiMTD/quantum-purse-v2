@@ -8,8 +8,8 @@ use qpv2_core::KeyVault;
 use super::accounts::{header_cell, table_rule};
 use super::utils::truncate_middle;
 use super::utils::{
-    auth_badge_label, badge, breathing_dot, ghost_button, hold_button, panel_frame, row_hover,
-    section_header,
+    auth_badge_label, badge, breathing_dot, device_waiting_line, ghost_button, hold_button,
+    panel_frame, row_hover, section_header, FIDO2_WAITING_TEXT,
 };
 use crate::types::{display_font, label_font, Status};
 use crate::App;
@@ -76,11 +76,15 @@ impl App {
                         let export =
                             ghost_button(&self.colors, "EXPORT SEED", egui::vec2(110.0, 24.0));
                         if ui
-                            .add(export)
+                            .add_enabled(!self.fido2_operation_in_flight(), export)
                             .on_hover_text("Reveal the active wallet's seed phrase")
                             .clicked()
                         {
-                            self.export_seed_phrase();
+                            if matches!(self.auth_method, Some(AuthMethod::Fido2 { .. })) {
+                                self.export_seed_phrase_with_fido2();
+                            } else {
+                                self.export_seed_phrase();
+                            }
                         }
                         let create =
                             ghost_button(&self.colors, "NEW WALLET", egui::vec2(120.0, 24.0));
@@ -97,6 +101,10 @@ impl App {
                             self.import_from_v1 = false;
                         }
                     });
+                    if self.fido2_export_rx.is_some() {
+                        ui.add_space(8.0);
+                        device_waiting_line(ui, &self.colors, FIDO2_WAITING_TEXT);
+                    }
                     ui.add_space(10.0);
 
                     if self.wallet_cache.is_empty() {

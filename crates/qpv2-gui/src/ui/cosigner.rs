@@ -4,10 +4,27 @@
 //! Also provides a "Sign a Request" flow for the receiving co-signer.
 
 use eframe::egui;
+use qpv2_core::types::{AuthKey, AuthMethod, SigningRequest, SigningResponse, SpxVariant};
+use qpv2_core::KeyVault;
 
 use crate::types::{label_font, AppColors, Status, TransactionStatus};
-use crate::ui::utils::{ghost_button, panel_frame, section_header, SectionCounter};
+use crate::ui::utils::{
+    device_waiting_line, ghost_button, panel_frame, section_header, SectionCounter,
+    FIDO2_WAITING_TEXT,
+};
+use crate::wallet::{get_fido2_dek, spawn_fido2_job};
 use crate::App;
+
+/// Who in this wallet signs a co-signer's request, and what.
+struct CosignSigner {
+    variant: SpxVariant,
+    /// This wallet's position among the request's signers.
+    signer_index: usize,
+    /// The single-sig account that signs.
+    lock_args: String,
+    /// The message to sign, decoded from the request.
+    message: Vec<u8>,
+}
 
 /// Section header with a step pointer: the active step's title renders
 /// bright with a pulsing green triangle pointing at it — green for
@@ -537,8 +554,19 @@ impl App {
                         "Approve & Sign",
                         egui::vec2(ui.available_width(), 36.0),
                     );
-                    if ui.add(sign_btn).clicked() {
-                        self.cosign_sign_request(request);
+                    if ui
+                        .add_enabled(!self.fido2_operation_in_flight(), sign_btn)
+                        .clicked()
+                    {
+                        if matches!(self.auth_method, Some(AuthMethod::Fido2 { .. })) {
+                            self.co_sign_with_fido2(request);
+                        } else {
+                            self.co_sign(request);
+                        }
+                    }
+                    if self.fido2_cosign_rx.is_some() {
+                        ui.add_space(8.0);
+                        device_waiting_line(ui, &self.colors, FIDO2_WAITING_TEXT);
                     }
                 }
                 Err(e) => {
@@ -559,60 +587,48 @@ impl App {
         });
     }
 
-    /// Authenticate, find the matching local key, sign, and produce the response JSON.
-    fn cosign_sign_request(&mut self, request: qpv2_core::types::SigningRequest) {
-        use qpv2_core::KeyVault;
+    /// Checks a co-signer's request against THIS wallet's accounts: which
+    /// account signs, at which position among the signers, and the message.
+    fn find_local_signer(&self, request: &SigningRequest) -> Result<CosignSigner, String> {
+        let variant = KeyVault::get_spx_variant(self.wallet_id)
+            .map_err(|e| format!("Failed to read variant: {}", e))?;
+        let singlesig_accounts = KeyVault::get_singlesig_accounts(self.wallet_id)
+            .map_err(|e| format!("Failed to load accounts: {}", e))?;
 
-        let variant = match KeyVault::get_spx_variant(self.wallet_id) {
-            Ok(v) => v,
-            Err(e) => {
-                self.status = crate::types::Status::Error(format!("Failed to read variant: {}", e));
-                return;
-            }
-        };
-
-        let singlesig_accounts = match KeyVault::get_singlesig_accounts(self.wallet_id) {
-            Ok(a) => a,
-            Err(e) => {
-                self.status =
-                    crate::types::Status::Error(format!("Failed to load accounts: {}", e));
-                return;
-            }
-        };
-
-        let mut matched_signer_index = None;
-        let mut matched_lock_args = None;
-
+        let mut matched = None;
         for account in &singlesig_accounts {
             let account_pubkey = &account.config.signers[0].pubkey;
             for (i, signer) in request.multisig_config.signers.iter().enumerate() {
                 if signer.pubkey == *account_pubkey && signer.variant == variant {
-                    matched_signer_index = Some(i);
-                    matched_lock_args = Some(account.lock_args.clone());
+                    matched = Some((i, account.lock_args.clone()));
                     break;
                 }
             }
-            if matched_signer_index.is_some() {
+            if matched.is_some() {
                 break;
             }
         }
+        let (signer_index, lock_args) = matched
+            .ok_or_else(|| "No local account matches a signer in this request.".to_string())?;
 
-        let signer_index = match matched_signer_index {
-            Some(i) => i,
-            None => {
-                self.status = crate::types::Status::Error(
-                    "No local account matches a signer in this request.".to_string(),
-                );
-                return;
-            }
-        };
-        let singlesig_lock_args = matched_lock_args.unwrap();
+        let message = hex::decode(&request.signing_message)
+            .map_err(|e| format!("Invalid signing message hex: {}", e))?;
 
-        let message_bytes = match hex::decode(&request.signing_message) {
-            Ok(b) => b,
+        Ok(CosignSigner {
+            variant,
+            signer_index,
+            lock_args,
+            message,
+        })
+    }
+
+    /// Co-signs on a password or Touch ID wallet: checks the request, asks
+    /// for the key now, signs, then shows the response.
+    fn co_sign(&mut self, request: SigningRequest) {
+        let signer = match self.find_local_signer(&request) {
+            Ok(s) => s,
             Err(e) => {
-                self.status =
-                    crate::types::Status::Error(format!("Invalid signing message hex: {}", e));
+                self.status = Status::Error(e);
                 return;
             }
         };
@@ -621,11 +637,8 @@ impl App {
         // a transaction locked by its own single-sig lock, so there is no
         // device flow for `resolve_auth_key`'s generic Trezor message to
         // point at.
-        if matches!(
-            self.auth_method,
-            Some(qpv2_core::types::AuthMethod::Trezor { .. })
-        ) {
-            self.status = crate::types::Status::Error(
+        if matches!(self.auth_method, Some(AuthMethod::Trezor { .. })) {
+            self.status = Status::Error(
                 "Co-signing a multisig transaction on a Trezor is not supported yet.".to_string(),
             );
             return;
@@ -638,32 +651,67 @@ impl App {
             }
         };
 
-        let vault = KeyVault::new(variant, self.wallet_id);
-        let (signature, _pubkey) = match vault.raw_sign(auth, singlesig_lock_args, message_bytes) {
+        match sign(self.wallet_id, auth, &request, signer) {
+            Ok(response) => self.show_cosign_response(response),
+            Err(e) => self.status = Status::Error(e),
+        }
+    }
+
+    /// Co-signs on a FIDO2 wallet: checks the request, then the security key
+    /// and the signing run in the background, so the window stays live while
+    /// the key waits for a touch; `poll_fido2_cosign` shows the response.
+    fn co_sign_with_fido2(&mut self, request: SigningRequest) {
+        let signer = match self.find_local_signer(&request) {
             Ok(s) => s,
             Err(e) => {
-                self.status = crate::types::Status::Error(format!("Signing failed: {}", e));
+                self.status = Status::Error(e);
                 return;
             }
         };
-
-        let response = qpv2_core::types::SigningResponse {
-            version: request.version,
-            signer_index,
-            signature: hex::encode(&signature),
-            signing_message: request.signing_message.clone(),
-        };
-
-        match serde_json::to_string_pretty(&response) {
-            Ok(json) => {
-                self.cosign_response_json = Some(json);
-                self.status =
-                    crate::types::Status::Info("Signed! Copy the response below.".to_string());
-            }
+        let credential_id = match self.get_fido2_credential() {
+            Ok(c) => c,
             Err(e) => {
-                self.status =
-                    crate::types::Status::Error(format!("Failed to serialize response: {}", e));
+                self.status = Status::Error(e);
+                return;
             }
+        };
+        let wallet_id = self.wallet_id;
+        let job = move || {
+            let auth = get_fido2_dek(&credential_id, "co-sign a multisig transaction")
+                .map_err(|e| format!("Auth failed: {}", e))?;
+            sign(wallet_id, auth, &request, signer)
+        };
+        match spawn_fido2_job(job) {
+            Ok(rx) => self.fido2_cosign_rx = Some(rx),
+            Err(e) => self.status = Status::Error(e),
         }
     }
+
+    /// Puts a signed co-signer response on screen, to copy back.
+    pub(crate) fn show_cosign_response(&mut self, response: String) {
+        self.cosign_response_json = Some(response);
+        self.status = Status::Info("Signed! Copy the response below.".to_string());
+    }
+}
+
+/// Signs a co-signer's request with the wallet key `auth` and returns the
+/// response to send back. Touches no UI state, so it can run on a worker.
+fn sign(
+    wallet_id: u32,
+    auth: AuthKey,
+    request: &SigningRequest,
+    signer: CosignSigner,
+) -> Result<String, String> {
+    let vault = KeyVault::new(signer.variant, wallet_id);
+    let (signature, _pubkey) = vault
+        .raw_sign(auth, signer.lock_args, signer.message)
+        .map_err(|e| format!("Signing failed: {}", e))?;
+    let response = SigningResponse {
+        version: request.version,
+        signer_index: signer.signer_index,
+        signature: hex::encode(&signature),
+        signing_message: request.signing_message.clone(),
+    };
+    serde_json::to_string_pretty(&response)
+        .map_err(|e| format!("Failed to serialize response: {}", e))
 }

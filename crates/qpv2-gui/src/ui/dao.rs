@@ -6,7 +6,7 @@ use eframe::egui;
 use super::utils::{
     badge, ckb_split, device_waiting_line, extract_ar, format_duration_ms, ghost_button,
     panel_frame, pin_popup_above_modal, row_hover, section_header, truncate_middle,
-    TREZOR_WAITING_TEXT,
+    FIDO2_WAITING_TEXT, TREZOR_WAITING_TEXT,
 };
 use crate::types::{display_font, label_font, AppColors, DaoView, Status, TransactionStatus};
 use crate::utils::{format_ckb, format_ckb_balance};
@@ -570,6 +570,16 @@ impl App {
                             {
                                 ui.add_space(8.0);
                                 device_waiting_line(ui, &self.colors, TREZOR_WAITING_TEXT);
+                            }
+                            // Same for a security key waiting for a touch.
+                            TransactionStatus::AwaitingSignature
+                                if matches!(
+                                    self.auth_method,
+                                    Some(qpv2_core::types::AuthMethod::Fido2 { .. })
+                                ) =>
+                            {
+                                ui.add_space(8.0);
+                                device_waiting_line(ui, &self.colors, FIDO2_WAITING_TEXT);
                             }
                             _ => {}
                         }

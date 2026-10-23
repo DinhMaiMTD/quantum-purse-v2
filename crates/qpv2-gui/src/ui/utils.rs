@@ -156,13 +156,20 @@ impl App {
                     c.text,
                     true,
                 );
-                // A Trezor signs on its own screen, so say where to look.
+                // A Trezor signs on its own screen and a security key waits
+                // for a touch, so say where to look.
                 if matches!(
                     self.auth_method,
                     Some(qpv2_core::types::AuthMethod::Trezor { .. })
                 ) {
                     ui.add_space(4.0);
                     device_waiting_line(ui, c, TREZOR_WAITING_TEXT);
+                } else if matches!(
+                    self.auth_method,
+                    Some(qpv2_core::types::AuthMethod::Fido2 { .. })
+                ) {
+                    ui.add_space(4.0);
+                    device_waiting_line(ui, c, FIDO2_WAITING_TEXT);
                 }
             }
             TransactionStatus::AwaitingCoSigners {

@@ -1,7 +1,7 @@
 //! Wallet lifecycle: create, unlock, lock, new account, config.
 
 use qpv2_core::types::{AuthKey, AuthMethod, SingleSigConvention, SpxVariant};
-use qpv2_core::KeyVault;
+use qpv2_core::{KeyVault, SecureString};
 
 use crate::tx_history::TxHistoryStore;
 use crate::types::{
@@ -22,6 +22,14 @@ const FIDO2_SETUP_THREAD: &str = "fido2-setup-thread";
 
 /// Name of the worker that asks the security key for a new account.
 const FIDO2_ACCOUNT_THREAD: &str = "fido2-account-thread";
+
+/// Name of the worker that asks the security key and then signs, co-signs or
+/// reads the seed phrase.
+const FIDO2_JOB_THREAD: &str = "fido2-job-thread";
+
+/// Why a security-key job was refused: one request at a time, as a second one
+/// would reach the key while it waits for the touch the first one asked for.
+const FIDO2_BUSY: &str = "The security key is busy with another request — finish it and try again.";
 
 /// Where light-client registration starts scanning for new scripts.
 pub(crate) enum StartingBlock {
@@ -270,6 +278,10 @@ impl App {
         // And a pending new account: it belongs to the wallet being left.
         self.trezor_new_account_rx = None;
         self.fido2_new_account_rx = None;
+        // And a pending security-key signature, co-signature or seed export.
+        self.fido2_sign_rx = None;
+        self.fido2_cosign_rx = None;
+        self.fido2_export_rx = None;
         // Link status belongs to the wallet being left; a late probe result
         // would otherwise describe the old wallet's device.
         self.device_status_rx = None;
@@ -595,8 +607,10 @@ impl App {
     }
 
     /// Resolve the authentication key based on the current auth method.
-    /// Synchronous: may block the egui update loop for pinentry dialogs
-    /// (password/FIDO2 paths).
+    /// Synchronous: blocks the egui update loop while the password dialog or
+    /// Touch ID prompt is open. A security key is never asked here: it waits
+    /// for a touch with nothing on screen, so `get_fido2_dek` asks it on a
+    /// worker.
     pub(crate) fn resolve_auth_key(&self, purpose: &str) -> Result<AuthKey, String> {
         match &self.auth_method {
             Some(AuthMethod::Password) => qpv2_core::pinentry::prompt_password(
@@ -607,25 +621,8 @@ impl App {
             Some(AuthMethod::Keychain) => {
                 keychain::retrieve_key(self.wallet_id, purpose).map(AuthKey::CryptoKey)
             }
-            Some(AuthMethod::Fido2 { credential_id }) => {
-                // One request at a time: a second one would reach the key
-                // while it waits for the touch the first one asked for.
-                if self.fido2_operation_in_flight() {
-                    return Err("The security key is busy with another request — finish it \
-                                and try again."
-                        .to_string());
-                }
-                let cred_bytes = hex::decode(credential_id)
-                    .map_err(|e| format!("Invalid credential ID: {}", e))?;
-                let verification = fido2_verification(purpose)?;
-                let hmac_output = keychain::fido2::authenticate(&cred_bytes, &verification)?;
-                qpv2_core::utilities::derive_vault_enc_key(&hmac_output)
-                    .map(AuthKey::CryptoKey)
-                    .map_err(|e| format!("Key derivation failed: {}", e))
-            }
-            Some(AuthMethod::Trezor { .. }) => Err(
-                "This is a Trezor wallet; approve the action on your device instead.".to_string(),
-            ),
+            Some(AuthMethod::Fido2 { .. }) => Err("FIDO2 key Not available.".to_string()),
+            Some(AuthMethod::Trezor { .. }) => Err("Trezor key not available".to_string()),
             None => Err("No authentication method set.".to_string()),
         }
     }
@@ -957,6 +954,8 @@ impl App {
         );
     }
 
+    /// Shows the seed phrase on a password or Touch ID wallet: asks for the
+    /// key now, decrypts the phrase, then opens the secure dialog.
     pub(crate) fn export_seed_phrase(&mut self) {
         if self.seed_export_dialog_done_rx.is_some() {
             return;
@@ -969,26 +968,46 @@ impl App {
                 return;
             }
         };
-
-        let variant = match KeyVault::get_spx_variant(self.wallet_id) {
-            Ok(v) => v,
+        match get_exported_seed_phrase(self.wallet_id, auth) {
+            Ok(phrase) => self.show_seed_phrase_dialog(phrase),
             Err(e) => {
-                let msg = format!("Failed to read wallet variant: {}", e);
-                tracing::error!("{}", msg);
-                self.status = Status::Error(msg);
+                tracing::error!("{}", e);
+                self.status = Status::Error(e);
+            }
+        }
+    }
+
+    /// Shows the seed phrase on a FIDO2 wallet. The security key and the
+    /// decryption run in the background, so the window stays live while the
+    /// key waits for a touch; `poll_fido2_export` opens the dialog.
+    pub(crate) fn export_seed_phrase_with_fido2(&mut self) {
+        if self.seed_export_dialog_done_rx.is_some() {
+            return;
+        }
+        let credential_id = match self.get_fido2_credential() {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::error!("{}", e);
+                self.status = Status::Error(e);
                 return;
             }
         };
-        let phrase = match KeyVault::new(variant, self.wallet_id).export_seed_phrase(auth) {
-            Ok(p) => p,
-            Err(e) => {
-                let msg = format!("Failed to export seed phrase: {}", e);
-                tracing::error!("{}", msg);
-                self.status = Status::Error(msg);
-                return;
-            }
+        let wallet_id = self.wallet_id;
+        let job = move || {
+            let auth = get_fido2_dek(&credential_id, "export the seed phrase")?;
+            get_exported_seed_phrase(wallet_id, auth)
         };
+        match spawn_fido2_job(job) {
+            Ok(rx) => self.fido2_export_rx = Some(rx),
+            Err(e) => {
+                tracing::error!("{}", e);
+                self.status = Status::Error(e);
+            }
+        }
+    }
 
+    /// Opens the secure dialog showing `phrase`.
+    pub(crate) fn show_seed_phrase_dialog(&mut self, phrase: SecureString) {
         let wallet_id = self.wallet_id;
         let (tx, rx) = std::sync::mpsc::channel();
         self.seed_export_dialog_done_rx = Some(rx);
@@ -1152,11 +1171,26 @@ impl App {
     }
 
     /// True while one of our requests waits on a security key: a wallet create
-    /// or import, or a new account. The security-key counterpart of
-    /// `trezor_operation_in_flight`, minus signing, which still holds the UI
-    /// thread until the key answers.
+    /// or import, a new account, or a signature, co-signature or seed export.
+    /// The security-key counterpart of `trezor_operation_in_flight`.
     pub(crate) fn fido2_operation_in_flight(&self) -> bool {
-        self.fido2_connect_rx.is_some() || self.fido2_new_account_rx.is_some()
+        self.fido2_connect_rx.is_some()
+            || self.fido2_new_account_rx.is_some()
+            || self.fido2_sign_rx.is_some()
+            || self.fido2_cosign_rx.is_some()
+            || self.fido2_export_rx.is_some()
+    }
+
+    /// The open wallet's security-key credential, for a new job on the key.
+    /// Refused while another request waits on the key (`FIDO2_BUSY`).
+    pub(crate) fn get_fido2_credential(&self) -> Result<String, String> {
+        if self.fido2_operation_in_flight() {
+            return Err(FIDO2_BUSY.to_string());
+        }
+        match &self.auth_method {
+            Some(AuthMethod::Fido2 { credential_id }) => Ok(credential_id.clone()),
+            _ => Err("This wallet doesn't use a FIDO2 security key.".to_string()),
+        }
     }
 
     /// True while a Trezor or security-key task runs in the background and
@@ -1652,6 +1686,44 @@ fn fido2_verification(purpose: &str) -> Result<keychain::fido2::Verification, St
         "PIN:",
     )?;
     Ok(keychain::fido2::Verification::OnHost(pin))
+}
+
+/// Asks the security key for the wallet's vault key: the PIN dialog when the
+/// key wants one, then a touch. Blocks until the key answers, so it runs on a
+/// worker (`spawn_fido2_job`).
+pub(crate) fn get_fido2_dek(credential_id: &str, purpose: &str) -> Result<AuthKey, String> {
+    let cred_bytes =
+        hex::decode(credential_id).map_err(|e| format!("Invalid credential ID: {}", e))?;
+    let verification = fido2_verification(purpose)?;
+    let hmac_output = keychain::fido2::authenticate(&cred_bytes, &verification)?;
+    qpv2_core::utilities::derive_vault_enc_key(&hmac_output)
+        .map(AuthKey::CryptoKey)
+        .map_err(|e| format!("Key derivation failed: {}", e))
+}
+
+/// Runs a security-key job on a worker named for the log, and hands back
+/// where its result will arrive.
+pub(crate) fn spawn_fido2_job<T: Send + 'static>(
+    job: impl FnOnce() -> T + Send + 'static,
+) -> Result<std::sync::mpsc::Receiver<T>, String> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::Builder::new()
+        .name(FIDO2_JOB_THREAD.to_string())
+        .spawn(move || {
+            let _ = tx.send(job());
+        })
+        .map_err(|e| format!("Failed to start the FIDO2 thread: {}", e))?;
+    Ok(rx)
+}
+
+/// Decrypts the wallet's seed phrase with the wallet key `auth`. Touches no
+/// UI state, so it can run on a worker.
+fn get_exported_seed_phrase(wallet_id: u32, auth: AuthKey) -> Result<SecureString, String> {
+    let variant = KeyVault::get_spx_variant(wallet_id)
+        .map_err(|e| format!("Failed to read wallet variant: {}", e))?;
+    KeyVault::new(variant, wallet_id)
+        .export_seed_phrase(auth)
+        .map_err(|e| format!("Failed to export seed phrase: {}", e))
 }
 
 const LAST_WALLET_FILE: &str = "last_wallet.json";
