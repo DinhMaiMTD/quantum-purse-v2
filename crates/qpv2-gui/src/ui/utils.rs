@@ -81,34 +81,53 @@ impl App {
     }
 
     /// Render the current status as a single mono log line:
-    /// `[ OK ] message` / `[ERR ] message`, or a dim READY prompt.
-    pub(crate) fn show_status(&self, ui: &mut egui::Ui) {
+    /// `[ OK ] message` / `[ERR ] message`. An error and a sent transaction
+    /// end in a copy icon for the full error or hash.
+    ///
+    /// `one_line` is for the bottom bar, which has room for one line: a long
+    /// message is cut with "…" and shown whole on hover. Otherwise it wraps
+    /// at the caller's width (e.g. the setup panel).
+    pub(crate) fn show_status(&self, ui: &mut egui::Ui, one_line: bool) {
         let c = &self.colors;
-        match &self.status {
-            Status::None => {}
-            // `horizontal_wrapped` so long messages wrap at the caller's
-            // allocated width (e.g. the setup panel) instead of running past
-            // it — plain `horizontal` lets labels extend unbounded.
-            Status::Info(msg) => {
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(
-                        egui::RichText::new("[ OK ]")
-                            .font(label_font(10.0))
-                            .color(c.accent2),
-                    );
-                    ui.label(egui::RichText::new(msg).size(12.0).color(c.text));
+        let (tag, tag_color, msg, msg_color, copy) = match &self.status {
+            Status::None => return,
+            Status::Info(msg) => ("[ OK ]", c.accent2, msg.clone(), c.text, None),
+            Status::Sent(hash) => (
+                "[ OK ]",
+                c.accent2,
+                format!("Transaction sent 0x{}", truncate_middle(hash, 8, 8)),
+                c.text,
+                Some(format!("0x{}", hash)),
+            ),
+            Status::Error(msg) => ("[ERR ]", c.danger, msg.clone(), c.danger, Some(msg.clone())),
+        };
+        let row = |ui: &mut egui::Ui| {
+            ui.label(
+                egui::RichText::new(tag)
+                    .font(label_font(10.0))
+                    .color(tag_color),
+            );
+            let text = egui::RichText::new(msg).size(12.0).color(msg_color);
+            if one_line {
+                // Leaves room for the copy icon and the bar's clock.
+                let max_w = (ui.available_width() - STATUS_BAR_RESERVED_W).max(0.0);
+                ui.scope(|ui| {
+                    ui.set_max_width(max_w);
+                    ui.add(egui::Label::new(text).truncate());
                 });
+            } else {
+                ui.add(egui::Label::new(text).wrap());
             }
-            Status::Error(msg) => {
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(
-                        egui::RichText::new("[ERR ]")
-                            .font(label_font(10.0))
-                            .color(c.danger),
-                    );
-                    ui.label(egui::RichText::new(msg).size(12.0).color(c.danger));
-                });
+            if let Some(copy) = &copy {
+                copy_icon(ui, c, copy);
             }
+        };
+        if one_line {
+            ui.horizontal(row);
+        } else {
+            // Plain `horizontal` would let the label run past the caller's
+            // width instead of wrapping at it.
+            ui.horizontal_wrapped(row);
         }
     }
 
@@ -125,20 +144,26 @@ impl App {
     /// TransactionStatus progression rendered as terminal log lines.
     /// `dao_screen` scopes the log to the calling screen's own flow —
     /// the status slot is shared, and a DAO transaction's progress must
-    /// not read as a transfer's (or vice versa).
-    pub(crate) fn draw_tx_status_log(&mut self, ui: &mut egui::Ui, dao_screen: bool) {
+    /// not read as a transfer's (or vice versa). A finished transaction's
+    /// result shows in the status bar instead (`report_finished_tx_status`).
+    pub(crate) fn draw_tx_status_log(&self, ui: &mut egui::Ui, dao_screen: bool) {
         let owns = self
             .active_tx_kind
             .is_some_and(|k| k.is_dao() == dao_screen);
-        if matches!(self.tx_status, TransactionStatus::Idle) || !owns {
+        let finished = matches!(
+            self.tx_status,
+            TransactionStatus::Idle | TransactionStatus::Success(_) | TransactionStatus::Error(_)
+        );
+        if finished || !owns {
             return;
         }
         let c = &self.colors;
         ui.add_space(10.0);
 
-        let mut copied_hash: Option<String> = None;
         match &self.tx_status {
-            TransactionStatus::Idle => {}
+            TransactionStatus::Idle
+            | TransactionStatus::Success(_)
+            | TransactionStatus::Error(_) => {}
             TransactionStatus::Building => log_line(
                 ui,
                 "[BUILD]",
@@ -157,19 +182,27 @@ impl App {
                     true,
                 );
                 // A Trezor signs on its own screen and a security key waits
-                // for a touch, so say where to look.
+                // for a touch, so say where to look. Indented to start under
+                // the message, so the tag column holds only tags.
+                let indent = log_line_dot_indent(ui, "[SIGN ]");
                 if matches!(
                     self.auth_method,
                     Some(qpv2_core::types::AuthMethod::Trezor { .. })
                 ) {
                     ui.add_space(4.0);
-                    device_waiting_line(ui, c, TREZOR_WAITING_TEXT);
+                    ui.horizontal(|ui| {
+                        ui.add_space(indent);
+                        device_waiting_line(ui, c, TREZOR_WAITING_TEXT);
+                    });
                 } else if matches!(
                     self.auth_method,
                     Some(qpv2_core::types::AuthMethod::Fido2 { .. })
                 ) {
                     ui.add_space(4.0);
-                    fido2_waiting_line(ui, c);
+                    ui.horizontal(|ui| {
+                        ui.add_space(indent);
+                        fido2_waiting_line(ui, c);
+                    });
                 }
             }
             TransactionStatus::AwaitingCoSigners {
@@ -196,44 +229,74 @@ impl App {
                 c.text,
                 true,
             ),
-            TransactionStatus::Success(tx_hash) => {
-                ui.horizontal(|ui| {
-                    ui.label(
-                        egui::RichText::new("[ OK  ]")
-                            .font(label_font(10.0))
-                            .color(c.accent2),
-                    );
-                    ui.label(
-                        egui::RichText::new("Transaction sent")
-                            .size(11.5)
-                            .color(c.accent2),
-                    );
-                    ui.label(
-                        egui::RichText::new(format!(
-                            "0x{}…{}",
-                            &tx_hash[..8],
-                            &tx_hash[tx_hash.len() - 8..]
-                        ))
-                        .size(11.5)
-                        .color(c.text_muted),
-                    );
-                    if ui
-                        .add(ghost_button(c, "COPY", egui::vec2(50.0, 20.0)))
-                        .clicked()
-                    {
-                        copied_hash = Some(format!("0x{}", tx_hash));
-                    }
-                });
-            }
-            TransactionStatus::Error(msg) => {
-                log_line(ui, "[ ERR ]", c.danger, msg, c.danger, false)
-            }
         }
+    }
+}
 
-        if let Some(hash) = copied_hash {
-            ui.ctx().copy_text(hash);
-            self.status = Status::Info("Transaction hash copied!".to_string());
-        }
+/// Width the bottom bar keeps free to the right of a one-line status: its
+/// copy icon and the clock.
+const STATUS_BAR_RESERVED_W: f32 = 160.0;
+
+/// How long the copy icon shows a check mark after a click, in seconds.
+const COPIED_FLASH_SECS: f64 = 1.5;
+
+/// A small copy icon for `text`: two overlapping sheets, muted until
+/// hovered. A click turns it into a check mark for a moment, and the line it
+/// sits on stays as it was.
+pub(crate) fn copy_icon(ui: &mut egui::Ui, colors: &AppColors, text: &str) {
+    // Keyed by the text, so a different message starts out unchecked.
+    let id = egui::Id::new(("copy_icon", text));
+    let now = ui.input(|i| i.time);
+    let copied_at = ui
+        .data(|d| d.get_temp::<f64>(id))
+        .filter(|t| now - t < COPIED_FLASH_SECS);
+
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::click());
+    let response = response
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .on_hover_text("Copy");
+    if response.clicked() {
+        ui.ctx().copy_text(text.to_string());
+        ui.data_mut(|d| d.insert_temp(id, now));
+    }
+
+    // A 12 px glyph centred in the 16 px hit area.
+    let origin = rect.center() - egui::vec2(6.0, 6.0);
+    let at = |x: f32, y: f32| origin + egui::vec2(x, y);
+    let painter = ui.painter();
+    if let Some(t) = copied_at {
+        let check = egui::Stroke::new(1.4, colors.accent2);
+        painter.add(egui::Shape::line(
+            vec![at(1.5, 6.5), at(4.5, 9.5), at(10.5, 3.0)],
+            check,
+        ));
+        // Repaint when the flash ends, so the icon turns back on its own.
+        ui.ctx()
+            .request_repaint_after(Duration::from_secs_f64(COPIED_FLASH_SECS - (now - t)));
+    } else {
+        let color = if response.hovered() {
+            colors.accent
+        } else {
+            colors.text_muted
+        };
+        let stroke = egui::Stroke::new(1.2, color);
+        // The back sheet: only the edges the front one leaves showing.
+        painter.add(egui::Shape::line(
+            vec![
+                at(4.0, 8.0),
+                at(0.5, 8.0),
+                at(0.5, 0.5),
+                at(8.0, 0.5),
+                at(8.0, 4.0),
+            ],
+            stroke,
+        ));
+        painter.rect_stroke(
+            egui::Rect::from_min_max(at(4.0, 4.0), at(11.5, 11.5)),
+            0.0,
+            stroke,
+            egui::StrokeKind::Inside,
+        );
     }
 }
 
@@ -767,10 +830,10 @@ pub(crate) fn device_waiting_line(ui: &mut egui::Ui, colors: &AppColors, text: &
     });
 }
 
-/// The waiting line for a security-key request, ending in a `[ CANCEL ]` that
-/// stops the key's wait. It appears only while the key itself waits; the PIN
-/// dialog before that has its own. A key has no screen to decline on, so
-/// without this the only ways out would be the key's own timeout or
+/// The waiting line for a security-key request, ending in a small red ✕
+/// that stops the key's wait. It appears only while the key itself waits;
+/// the PIN dialog before that has its own. A key has no screen to decline
+/// on, so without this the only ways out would be the key's own timeout or
 /// unplugging it.
 pub(crate) fn fido2_waiting_line(ui: &mut egui::Ui, colors: &AppColors) {
     ui.horizontal(|ui| {
@@ -778,24 +841,40 @@ pub(crate) fn fido2_waiting_line(ui: &mut egui::Ui, colors: &AppColors) {
         if !keychain::fido2::cancellable() {
             return;
         }
-        // Bracketed text rather than a framed button, which read as a second
-        // main action beside the panel's own. Muted until hovered, so the
-        // instruction stays the line's only warm colour.
-        ui.add_space(6.0);
-        let galley = ui.painter().layout_no_wrap(
-            "[ CANCEL ]".to_string(),
-            label_font(10.0),
-            egui::Color32::PLACEHOLDER,
+        // A hairline glyph in a 16 px hit area, like the copy icon, rather
+        // than a framed button, which read as a second main action beside
+        // the panel's own. Always red: it is the line's stop action. A faint
+        // red square behind it on hover says it can be clicked.
+        ui.add_space(4.0);
+        let (rect, response) = ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::click());
+        let red = colors.danger;
+        if response.hovered() {
+            ui.painter().rect_filled(
+                rect,
+                0.0,
+                egui::Color32::from_rgba_unmultiplied(red.r(), red.g(), red.b(), 32),
+            );
+        }
+        let stroke = egui::Stroke::new(1.4, red);
+        let centre = rect.center();
+        let arm = 4.0;
+        ui.painter().line_segment(
+            [
+                centre + egui::vec2(-arm, -arm),
+                centre + egui::vec2(arm, arm),
+            ],
+            stroke,
         );
-        let (rect, response) = ui.allocate_exact_size(galley.size(), egui::Sense::click());
-        let color = if response.hovered() {
-            colors.warn
-        } else {
-            colors.text_muted
-        };
-        ui.painter().galley(rect.min, galley, color);
+        ui.painter().line_segment(
+            [
+                centre + egui::vec2(-arm, arm),
+                centre + egui::vec2(arm, -arm),
+            ],
+            stroke,
+        );
         if response
             .on_hover_cursor(egui::CursorIcon::PointingHand)
+            .on_hover_text("Cancel")
             .clicked()
         {
             if let Err(e) = keychain::fido2::cancel() {
@@ -888,6 +967,23 @@ pub(crate) fn lerp_color(a: egui::Color32, b: egui::Color32, t: f32) -> egui::Co
         mix(a.b(), b.b()),
         mix(a.a(), b.a()),
     )
+}
+
+/// How far to indent a `device_waiting_line` so its dot sits under the live
+/// dot of a `log_line` tagged `tag`: the tag's width and the gap after it,
+/// plus 1 px because the log line's dot box is 12 px wide and the waiting
+/// line's is 10.
+fn log_line_dot_indent(ui: &egui::Ui, tag: &str) -> f32 {
+    let tag_w = ui
+        .painter()
+        .layout_no_wrap(
+            tag.to_string(),
+            label_font(10.0),
+            egui::Color32::PLACEHOLDER,
+        )
+        .size()
+        .x;
+    tag_w + ui.spacing().item_spacing.x + 1.0
 }
 
 /// One terminal log line: `[TAG ] message`, with an optional breathing

@@ -532,7 +532,7 @@ impl App {
                             .color(self.colors.text_muted),
                     );
                 }
-                _ => self.show_status(ui),
+                _ => self.show_status(ui, true),
             }
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -679,7 +679,7 @@ impl App {
             ui.allocate_ui_with_layout(
                 egui::vec2(panel_w, 0.0),
                 egui::Layout::top_down(egui::Align::Min),
-                |ui| self.show_status(ui),
+                |ui| self.show_status(ui, false),
             );
         });
     }
@@ -819,7 +819,7 @@ impl App {
             ui.allocate_ui_with_layout(
                 egui::vec2(panel_w, 0.0),
                 egui::Layout::top_down(egui::Align::Min),
-                |ui| self.show_status(ui),
+                |ui| self.show_status(ui, false),
             );
         });
     }

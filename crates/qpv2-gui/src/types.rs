@@ -356,6 +356,8 @@ pub(crate) enum Screen {
 pub(crate) enum Status {
     None,
     Info(String),
+    /// A transaction was sent; holds its hash without the `0x`.
+    Sent(String),
     Error(String),
 }
 

@@ -220,11 +220,8 @@ impl App {
             return;
         }
 
-        // When DAO deposit transaction succeeds, close the modal and return.
-        if matches!(self.tx_status, TransactionStatus::Success(_)) {
-            self.dao_view = DaoView::Overview;
-            return;
-        }
+        // A finished deposit, sent or failed, closes this modal and reports
+        // in the status bar: see `report_finished_tx_status`.
 
         let is_busy = !matches!(
             self.tx_status,
@@ -513,52 +510,9 @@ impl App {
                         }
 
                         // ── Status messages ──
-                        let mut copied_hash: Option<String> = None;
+                        // Only the signing hint: a finished deposit closes
+                        // this modal and reports in the status bar.
                         match &self.tx_status {
-                            TransactionStatus::Success(tx_hash) => {
-                                ui.add_space(8.0);
-                                ui.horizontal(|ui| {
-                                    ui.label(
-                                        egui::RichText::new("[ OK ]")
-                                            .font(label_font(10.0))
-                                            .color(self.colors.accent2),
-                                    );
-                                    ui.label(
-                                        egui::RichText::new(format!(
-                                            "SENT 0x{}…{}",
-                                            &tx_hash[..8],
-                                            &tx_hash[tx_hash.len() - 8..]
-                                        ))
-                                        .size(11.0)
-                                        .color(self.colors.text_muted),
-                                    );
-                                    if ui
-                                        .add(ghost_button(
-                                            &self.colors,
-                                            "COPY",
-                                            egui::vec2(48.0, 18.0),
-                                        ))
-                                        .clicked()
-                                    {
-                                        copied_hash = Some(format!("0x{}", tx_hash));
-                                    }
-                                });
-                            }
-                            TransactionStatus::Error(e) => {
-                                ui.add_space(8.0);
-                                ui.horizontal(|ui| {
-                                    ui.label(
-                                        egui::RichText::new("[ERR ]")
-                                            .font(label_font(10.0))
-                                            .color(self.colors.danger),
-                                    );
-                                    ui.label(
-                                        egui::RichText::new(e)
-                                            .size(11.5)
-                                            .color(self.colors.danger),
-                                    );
-                                });
-                            }
                             // A Trezor signs on its own screen, so say where
                             // to look. The page's log says the same, but this
                             // dialog covers it.
@@ -582,12 +536,6 @@ impl App {
                                 fido2_waiting_line(ui, &self.colors);
                             }
                             _ => {}
-                        }
-
-                        if let Some(hash) = copied_hash {
-                            ui.ctx().copy_text(hash);
-                            self.status =
-                                Status::Info("Transaction hash copied!".to_string());
                         }
 
                         ui.add_space(12.0);

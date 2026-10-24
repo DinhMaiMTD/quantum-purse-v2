@@ -28,7 +28,7 @@ use wallet::{load_last_wallet_id, save_last_wallet_id};
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
 
 /// How long a non-None status banner stays visible before auto-clearing.
-const STATUS_DURATION: Duration = Duration::from_secs(15);
+const STATUS_DURATION: Duration = Duration::from_secs(30);
 
 /// Cadence for rebuilding the QR-lock adoption series — it pages every
 /// live QR cell, so refresh sparingly; the data is weekly-grained.
@@ -583,6 +583,25 @@ impl App {
             }
         }
     }
+
+    /// Moves a finished transaction's result to the status bar and clears it
+    /// from the flow, so the form or dialog it came from shows no result. The
+    /// DAO deposit dialog closes, since its result now shows outside it.
+    /// Called at the end of each frame, after whatever finished it: a poll or
+    /// a click that failed validation.
+    fn report_finished_tx_status(&mut self, ctx: &egui::Context) {
+        self.status = match &self.tx_status {
+            TransactionStatus::Success(hash) => Status::Sent(hash.clone()),
+            TransactionStatus::Error(e) => Status::Error(e.clone()),
+            _ => return,
+        };
+        self.tx_status = TransactionStatus::Idle;
+        if self.dao_view == DaoView::Deposit {
+            self.dao_view = DaoView::Overview;
+        }
+        // The bar was already drawn this frame.
+        ctx.request_repaint();
+    }
 }
 
 impl eframe::App for App {
@@ -701,6 +720,14 @@ impl eframe::App for App {
                 // Sidebar + content layout handled by show_unlocked.
                 self.show_unlocked(ui);
             }
+        }
+
+        // After drawing, so it also catches a transaction that a click just
+        // failed (e.g. an empty recipient), not only one a poll finished. Only
+        // while unlocked: the cover keeps the status line empty (`hide_wallet`),
+        // so a result that arrives behind it waits until the wallet shows.
+        if self.screen == Screen::Unlocked {
+            self.report_finished_tx_status(&ctx);
         }
 
         // Request repaint while an async operation is pending so we poll promptly.
