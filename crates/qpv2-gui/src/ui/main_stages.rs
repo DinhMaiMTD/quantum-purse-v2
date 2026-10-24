@@ -100,10 +100,10 @@ impl App {
                             Tab::Dashboard => self.show_dashboard_tab(ui),
                             Tab::Transfer => self.show_transfer_tab(ui),
                             Tab::DaoOperations => self.show_dao_tab(ui),
-                            Tab::NodeManager => self.show_node_manager_tab(ui),
                             Tab::Accounts => self.show_accounts_tab(ui),
                             Tab::Multisig => self.show_multisig_tab(ui),
                             Tab::Wallets => self.show_wallets_tab(ui),
+                            Tab::Settings => self.show_settings_tab(ui),
                         }
                     });
             });
@@ -201,7 +201,7 @@ impl App {
         };
 
         // Sync percentage rides along for local backends — this is
-        // its home; the Networks tab's backend cards show state only.
+        // its home; the Settings tab's backend cards show state only.
         // Green once fully synced, accent while catching up.
         let node_type = self.qp_client.config().node_type;
         let sync_suffix = if online && node_type != NodeType::PublicRpc {
@@ -240,14 +240,14 @@ impl App {
             t,
         );
         if foreign_node.is_some() {
-            // No dropdown: the Networks tab is where the foreign node is
+            // No dropdown: the Settings tab is where the foreign node is
             // explained and where the way out (another node type) lives.
             if seg.clicked() && !self.device_task_in_flight() {
-                self.active_tab = Tab::NodeManager;
+                self.active_tab = Tab::Settings;
             }
             seg.on_hover_text(
                 "Another process holds this node's port, so QPV2 is reading that node \
-                 instead of running its own. Click to open the Networks tab.",
+                 instead of running its own. Click to open the Settings tab.",
             );
             ui.add_space(10.0);
             self.node_selector_open = false;

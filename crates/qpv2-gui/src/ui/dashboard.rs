@@ -344,7 +344,7 @@ impl App {
             ("SEND", Tab::Transfer),
             ("RECEIVE", Tab::Accounts),
             ("DAO", Tab::DaoOperations),
-            ("NODES", Tab::NodeManager),
+            ("SETTINGS", Tab::Settings),
             ("WALLETS", Tab::Wallets),
         ];
         let gap = 8.0;

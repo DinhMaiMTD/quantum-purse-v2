@@ -1,4 +1,4 @@
-//! Networks tab: backend selection and live node instrumentation.
+//! Settings tab: backend selection and live node instrumentation.
 
 use ckb_node::{NetworkType, NodeConfig, NodeType};
 use eframe::egui;
@@ -14,7 +14,7 @@ use crate::App;
 const DASH: &str = "\u{2014}";
 
 impl App {
-    pub(crate) fn show_node_manager_tab(&mut self, ui: &mut egui::Ui) {
+    pub(crate) fn show_settings_tab(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.add_space(24.0);
             ui.vertical(|ui| {
@@ -28,7 +28,7 @@ impl App {
                     ui.vertical(|ui| {
                         ui.horizontal(|ui| {
                             ui.label(
-                                egui::RichText::new("NETWORKS")
+                                egui::RichText::new("SETTINGS")
                                     .font(display_font(16.0))
                                     .color(self.colors.text),
                             );

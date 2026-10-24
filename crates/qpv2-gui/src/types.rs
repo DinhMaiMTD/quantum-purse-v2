@@ -171,10 +171,10 @@ pub(crate) enum Tab {
     Dashboard,
     Transfer,
     DaoOperations,
-    NodeManager,
     Accounts,
     Multisig,
     Wallets,
+    Settings,
 }
 
 impl Tab {
@@ -183,10 +183,10 @@ impl Tab {
         Tab::Dashboard,
         Tab::Transfer,
         Tab::DaoOperations,
-        Tab::NodeManager,
         Tab::Accounts,
         Tab::Multisig,
         Tab::Wallets,
+        Tab::Settings,
     ];
 
     /// Four-letter module code shown in the rail.
@@ -195,10 +195,10 @@ impl Tab {
             Tab::Dashboard => "DASH",
             Tab::Transfer => "XFER",
             Tab::DaoOperations => "DAO",
-            Tab::NodeManager => "NODE",
             Tab::Accounts => "ACCT",
             Tab::Multisig => "MSIG",
             Tab::Wallets => "WLLT",
+            Tab::Settings => "CONF",
         }
     }
 
@@ -208,10 +208,10 @@ impl Tab {
             Tab::Dashboard => "Dashboard",
             Tab::Transfer => "Transfer",
             Tab::DaoOperations => "Nervos DAO",
-            Tab::NodeManager => "Networks",
             Tab::Accounts => "Accounts",
             Tab::Multisig => "Multisig",
             Tab::Wallets => "Wallets",
+            Tab::Settings => "Settings",
         }
     }
 }
