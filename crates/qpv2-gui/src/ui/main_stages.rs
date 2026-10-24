@@ -783,8 +783,9 @@ impl App {
 
                                 ui.add_space(18.0);
 
-                                // Unlabelled: the label is painted below, once
-                                // the letters' pull is known.
+                                // Unlabelled and unfilled: the label is painted
+                                // below, once the letters' pull is known, and
+                                // its moving letters show the progress.
                                 hold_button(
                                     ui,
                                     egui::Id::new("cover-hold-to-show"),
@@ -800,10 +801,10 @@ impl App {
                 )
                 .inner;
             let cover = draw_cover(ui, stage, &self.colors, &hold);
-            // HOLD TO UNLOCK rides the letters' pull rather than the fill: the
-            // same while held, but it eases back with them on an early
-            // release, and stays right while the logo forms, where the fill
-            // has already reset.
+            // HOLD TO UNLOCK rides the letters' pull rather than the hold's
+            // own progress: the same while held, but it eases back with them
+            // on an early release, and stays right while the logo forms,
+            // where the hold's progress has already reset.
             hold_label(ui, hold.rect, cover.pull, self.colors.accent);
             if cover.done {
                 restart_cover(ui.ctx());
@@ -825,19 +826,38 @@ impl App {
     }
 }
 
-/// Paints HOLD TO UNLOCK over `button`, `along` (0 to 1) of the way from its
-/// left padding to its right.
+/// Paints HOLD TO UNLOCK over `button`, its letters carried from its left
+/// padding to its right as `along` goes from 0 to 1. The last letter sets off
+/// first and the first one last, so the letters spread apart on the way and
+/// close up again, all reaching the right edge together at 1. Each speeds up
+/// as it goes, so they hit the edge rather than settle against it.
 fn hold_label(ui: &egui::Ui, button: egui::Rect, along: f32, color: egui::Color32) {
+    /// The share of the travel over which the letters set off, last to first.
+    const STAGGER: f32 = 0.5;
+    let font = label_font(11.0);
     let galley = ui
         .painter()
-        .layout_no_wrap("HOLD TO UNLOCK".to_string(), label_font(11.0), color);
+        .layout_no_wrap("HOLD TO UNLOCK".to_string(), font.clone(), color);
+    let Some(row) = galley.rows.first() else {
+        return;
+    };
     let pad = ui.spacing().button_padding.x;
     let room = (button.width() - 2.0 * pad - galley.size().x).max(0.0);
-    let pos = egui::pos2(
-        button.left() + pad + along * room,
-        button.center().y - galley.size().y / 2.0,
-    );
-    ui.painter().galley(pos, galley, color);
+    let top = button.center().y - galley.size().y / 2.0;
+    let last = row.row.glyphs.len().saturating_sub(1).max(1) as f32;
+    for (i, glyph) in row.row.glyphs.iter().enumerate() {
+        // 0 for the last letter, which sets off first; 1 for the first.
+        let wait = STAGGER * (1.0 - i as f32 / last);
+        let own = ((along - wait) / (1.0 - wait)).clamp(0.0, 1.0);
+        let x = button.left() + pad + row.pos.x + glyph.pos.x + room * own * own;
+        ui.painter().text(
+            egui::pos2(x, top),
+            egui::Align2::LEFT_TOP,
+            glyph.chr,
+            font.clone(),
+            color,
+        );
+    }
 }
 
 /// Type-on boot lines in a fixed-size slot: the full text is measured

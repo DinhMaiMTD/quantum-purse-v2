@@ -8,9 +8,8 @@
 //! accelerating like magnets, their drift and tilt settling and their facing
 //! tips glowing, drawing in and brightening just before they touch; released
 //! early, they ease back apart. When the hold completes they meet in a burst
-//! of light, the weave cuts in with a flash on "\", a shockwave of light
-//! sweeps out across the window and a light runs once round the ∞; then the
-//! wallet opens.
+//! of light, the weave cuts in with a flash on "\" and a light runs once
+//! round the ∞; then the wallet opens.
 //! Everything is strokes, fills and meshes. egui has no blur, so a glow is a
 //! mesh whose colour fades smoothly to nothing at its edge, and it adds light
 //! to what lies under it rather than covering it.
@@ -107,8 +106,8 @@ pub(crate) fn draw_cover(
     let done = match state.finale_at {
         Some(at) => {
             let f = (now - at) as f32;
-            // The ripple crosses the whole window, so it is clipped to the
-            // window rather than the stage, on the same layer as the rest.
+            // The wash and the burst spill past the stage, so they are clipped
+            // to the window rather than the stage, on the same layer as the rest.
             let window = ui.ctx().layer_painter(ui.layer_id());
             draw_finale(&painter, &window, square, colors, f);
             ui.ctx().request_repaint();
@@ -266,10 +265,9 @@ fn draw_letters(painter: &egui::Painter, square: Rect, colors: &AppColors, t: f3
     }
 }
 
-/// The joining: a burst of light where the letters meet and a shockwave of
-/// light sweeping out across the window, the mark settling with a small bump
-/// and a flash on "\" as the weave cuts in, and a light running once round
-/// the ∞.
+/// The joining: a burst of light where the letters meet, the mark settling
+/// with a small bump and a flash on "\" as the weave cuts in, and a light
+/// running once round the ∞.
 fn draw_finale(
     painter: &egui::Painter,
     window: &egui::Painter,
@@ -284,28 +282,6 @@ fn draw_finale(
     let wash = 1.0 - f / 0.05;
     if wash > 0.0 {
         window.rect_filled(area, 0.0, light(colors.accent, 0.1 * wash));
-    }
-
-    // Out to the window's farthest corner, so the shockwave sweeps the whole
-    // window. It fades as it goes and is gone by the time it gets there.
-    let reach = [
-        area.left_top(),
-        area.right_top(),
-        area.left_bottom(),
-        area.right_bottom(),
-    ]
-    .map(|corner| corner.distance(crossing))
-    .into_iter()
-    .fold(0.0, f32::max);
-    let t = f / 0.8;
-    if t < 1.0 {
-        // Fast out and slowing as it spreads, thinner and dimmer as it grows.
-        let radius = 12.0 + (reach - 12.0) * ease_out_cubic(t);
-        let strength = smoothstep(0.0, 0.06, t) * (1.0 - t).powi(4);
-        // Never most of the radius, so it is a ring from the first frame
-        // rather than a filled disc.
-        let trail = (10.0 + 40.0 * (1.0 - t)).min(0.6 * radius);
-        shockwave(window, crossing, radius, trail, strength, colors);
     }
 
     // Scale about the crossing, so the bump doesn't shift the mark.
@@ -324,16 +300,36 @@ fn draw_finale(
         );
     }
 
-    // The burst where the letters met, over the logo so it flares white, and
-    // wide enough to spill well past it.
-    let burst = (f / 0.25).min(1.0);
-    if burst < 1.0 {
+    // The burst where the letters met, over the logo so it flares white. It
+    // spreads out to the window's farthest corner, fast and then slowing, and
+    // dims as its light spreads over the growing disc: its centre falls as
+    // 1/radius. Strictly the light would fall as 1/radius², but then it would
+    // be gone a short way out and the burst would stay small. It cools as it
+    // spreads, white-hot while small and the accent's cyan once wide, so the
+    // dim outer reach reads as light rather than grey haze. It fades out over
+    // its last 30%, so it ends smoothly before it reaches the corner.
+    const BURST_START: f32 = 40.0;
+    let reach = [
+        area.left_top(),
+        area.right_top(),
+        area.left_bottom(),
+        area.right_bottom(),
+    ]
+    .map(|corner| corner.distance(crossing))
+    .into_iter()
+    .fold(0.0, f32::max);
+    let t = f / 0.8;
+    if t < 1.0 {
+        let radius = BURST_START + (reach - BURST_START) * ease_out_cubic(t);
+        // 1 at the start, falling as the burst spreads.
+        let concentration = BURST_START / radius;
+        let strength = 0.9 * concentration * (1.0 - smoothstep(0.7, 1.0, t));
         glow(
             window,
             crossing,
-            40.0 + 100.0 * ease_out_cubic(burst),
-            0.9 * (1.0 - burst).powi(2),
-            mix(colors.accent, Color32::WHITE, 0.7),
+            radius,
+            strength,
+            mix(colors.accent, Color32::WHITE, 0.1 + 0.6 * concentration),
         );
     }
     light_run(painter, &layout, colors, (f / 0.7).clamp(0.0, 1.0));
@@ -412,31 +408,9 @@ fn glow(painter: &egui::Painter, at: Pos2, radius: f32, strength: f32, color: Co
         (1.0, 0.0),
     ]
     .map(|(r, k)| (radius * r, light(color, strength * k)));
-    radial_band(painter, at, &rows, 48);
-}
-
-/// A ring of light `radius` out from `at`: a crisp, hot front edge with a
-/// glow trailing `trail` points back towards the centre.
-fn shockwave(
-    painter: &egui::Painter,
-    at: Pos2,
-    radius: f32,
-    trail: f32,
-    strength: f32,
-    colors: &AppColors,
-) {
-    let hot = mix(colors.accent, Color32::WHITE, 0.6);
-    let rows = [
-        (radius - trail, Color32::TRANSPARENT),
-        (radius - 0.45 * trail, light(colors.accent, 0.15 * strength)),
-        (radius - 0.12 * trail, light(colors.accent, 0.45 * strength)),
-        (radius, light(hot, strength)),
-        // A point and a half of falloff stands in for anti-aliasing, which
-        // egui doesn't apply to meshes.
-        (radius + 1.5, Color32::TRANSPARENT),
-    ];
-    // Enough segments that the edge stays round across the whole window.
-    radial_band(painter, at, &rows, 256);
+    // More segments as it grows, so a glow as wide as the window stays round.
+    let segments = (radius * 0.5).clamp(48.0, 256.0) as u32;
+    radial_band(painter, at, &rows, segments);
 }
 
 /// Concentric rows of vertices round `centre`, each `(radius, colour)`,

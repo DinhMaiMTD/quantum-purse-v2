@@ -645,9 +645,10 @@ pub(crate) struct Hold {
 
 /// Ghost button in `color` that fires only after being held for
 /// `hold_secs`, by pointer or by Space or Enter while it has keyboard
-/// focus; a flat progress fill sweeps across while held, so the gesture is
-/// visible at all times. `id` keys the press timer and must be unique per
-/// button.
+/// focus. It doesn't show the progress itself: the caller does, so the
+/// gesture is visible at all times, with `paint_hold_fill` or a drawing of
+/// its own over `Hold::rect`. `id` keys the press timer and must be unique
+/// per button.
 pub(crate) fn hold_button(
     ui: &mut egui::Ui,
     id: egui::Id,
@@ -722,12 +723,6 @@ pub(crate) fn hold_button(
         }
         let start = press_start.unwrap_or(now);
         hold.progress = ((now - start) / hold_secs).clamp(0.0, 1.0) as f32;
-        let r = resp.rect;
-        ui.painter().rect_filled(
-            egui::Rect::from_min_size(r.min, egui::vec2(r.width() * hold.progress, r.height())),
-            0.0,
-            egui::Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 60),
-        );
         if hold.progress >= 1.0 {
             hold.fired = true;
             ui.ctx().memory_mut(|m| {
@@ -741,6 +736,20 @@ pub(crate) fn hold_button(
         ui.ctx().memory_mut(|m| m.data.remove::<f64>(id));
     }
     hold
+}
+
+/// A hold button's flat progress fill: `hold.progress` of the button from
+/// the left, in `color`. Paint it right after `hold_button`.
+pub(crate) fn paint_hold_fill(ui: &egui::Ui, hold: &Hold, color: egui::Color32) {
+    if hold.progress <= 0.0 {
+        return;
+    }
+    let r = hold.rect;
+    ui.painter().rect_filled(
+        egui::Rect::from_min_size(r.min, egui::vec2(r.width() * hold.progress, r.height())),
+        0.0,
+        egui::Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 60),
+    );
 }
 
 /// Primary action button: solid accent fill, near-black uppercase

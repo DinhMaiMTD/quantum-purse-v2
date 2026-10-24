@@ -9,7 +9,7 @@ use super::accounts::{header_cell, table_rule};
 use super::utils::truncate_middle;
 use super::utils::{
     auth_badge_label, badge, breathing_dot, fido2_waiting_line, ghost_button, hold_button,
-    panel_frame, row_hover, section_header,
+    paint_hold_fill, panel_frame, row_hover, section_header,
 };
 use crate::types::{display_font, label_font, Status};
 use crate::App;
@@ -414,7 +414,7 @@ impl App {
         delete_target: &mut Option<u32>,
     ) {
         let del_id = ui.id().with(("wallet-del-hold", wallet_id));
-        if hold_button(
+        let hold = hold_button(
             ui,
             del_id,
             "DELETE",
@@ -422,9 +422,9 @@ impl App {
             egui::vec2(64.0, 20.0),
             HOLD_SECS,
             Some("Hold to delete"),
-        )
-        .fired
-        {
+        );
+        paint_hold_fill(ui, &hold, self.colors.danger);
+        if hold.fired {
             *delete_target = Some(wallet_id);
         }
     }
