@@ -23,7 +23,7 @@ const ROW_H: f32 = 32.0;
 const ACTIONS_W: f32 = 160.0;
 /// Hold duration on DELETE before a wallet is removed — destructive,
 /// so a plain click must never be enough.
-const HOLD_SECS: f64 = 2.0;
+const HOLD_SECS: f64 = 10.0;
 
 impl App {
     pub(crate) fn show_wallets_tab(&mut self, ui: &mut egui::Ui) {
