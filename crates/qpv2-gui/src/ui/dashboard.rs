@@ -14,6 +14,13 @@ use crate::App;
 /// Horizontal padding for the whole screen.
 const PAD: f32 = 24.0;
 
+/// Height of one transaction tape row, in points: egui's logical pixels,
+/// each two screen pixels on a Retina display.
+const TAPE_ROW_H: f32 = 28.0;
+/// The most tape rows shown at once, one per transaction; more scroll.
+/// With the 3-point gap between rows, 30 rows is 930 points tall.
+const TAPE_MAX_ROWS: usize = 30;
+
 /// Meta value below the total: integer part + 2 decimals keeps the
 /// strip readable; the hero number above carries full precision.
 fn meta_ckb(shannons: u64) -> String {
@@ -438,45 +445,60 @@ impl App {
             // Copy is deferred past the loop: the rows borrow
             // `self.accounts`, so `self.status` can't be set inside it.
             let mut copied_hash: Option<String> = None;
-            for record in &records {
-                let owner_idx = accounts
-                    .iter()
-                    .position(|a| a.lock_args == record.owner_lock_args);
-                let counterparty_idx = record
-                    .internal_counterparty_lock_args
-                    .as_ref()
-                    .and_then(|args| accounts.iter().position(|a| a.lock_args == *args));
-                any_pending |= record.is_pending;
+            // At most `TAPE_MAX_ROWS` rows show at once, so a long history
+            // doesn't stretch the dashboard; the rest scroll under the
+            // header, which stays in place. Inside the page's own scroll
+            // area egui would size this one to the page's visible space left
+            // below it, often its 64 px minimum, so the height is also set as
+            // that minimum; a shorter history still shrinks to fit.
+            let row_pitch = TAPE_ROW_H + ui.spacing().item_spacing.y;
+            let tape_h = TAPE_MAX_ROWS as f32 * row_pitch;
+            egui::ScrollArea::vertical()
+                .id_salt("transaction-tape")
+                .max_height(tape_h)
+                .min_scrolled_height(tape_h)
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
+                    for record in &records {
+                        let owner_idx = accounts
+                            .iter()
+                            .position(|a| a.lock_args == record.owner_lock_args);
+                        let counterparty_idx = record
+                            .internal_counterparty_lock_args
+                            .as_ref()
+                            .and_then(|args| accounts.iter().position(|a| a.lock_args == *args));
+                        any_pending |= record.is_pending;
 
-                let (rect, response) =
-                    ui.allocate_exact_size(egui::vec2(w, 28.0), egui::Sense::click());
-                let response = response
-                    .on_hover_text("Click to copy transaction hash")
-                    .on_hover_cursor(egui::CursorIcon::PointingHand);
-                if response.clicked() {
-                    copied_hash = Some(record.tx_hash.clone());
-                }
-                let painter = ui.painter();
-                if response.hovered() {
-                    row_hover(painter, rect, &self.colors);
-                }
-                draw_tape_row(
-                    painter,
-                    rect,
-                    &self.colors,
-                    record,
-                    tip,
-                    owner_idx,
-                    counterparty_idx,
-                    (time_x, type_x, hash_x, amount_x, status_x),
-                    t,
-                );
-                painter.hline(
-                    rect.x_range(),
-                    rect.bottom() - 0.5,
-                    egui::Stroke::new(1.0, self.colors.border),
-                );
-            }
+                        let (rect, response) =
+                            ui.allocate_exact_size(egui::vec2(w, TAPE_ROW_H), egui::Sense::click());
+                        let response = response
+                            .on_hover_text("Click to copy transaction hash")
+                            .on_hover_cursor(egui::CursorIcon::PointingHand);
+                        if response.clicked() {
+                            copied_hash = Some(record.tx_hash.clone());
+                        }
+                        let painter = ui.painter();
+                        if response.hovered() {
+                            row_hover(painter, rect, &self.colors);
+                        }
+                        draw_tape_row(
+                            painter,
+                            rect,
+                            &self.colors,
+                            record,
+                            tip,
+                            owner_idx,
+                            counterparty_idx,
+                            (time_x, type_x, hash_x, amount_x, status_x),
+                            t,
+                        );
+                        painter.hline(
+                            rect.x_range(),
+                            rect.bottom() - 0.5,
+                            egui::Stroke::new(1.0, self.colors.border),
+                        );
+                    }
+                });
 
             if let Some(hash) = copied_hash {
                 ui.ctx().copy_text(hash);
