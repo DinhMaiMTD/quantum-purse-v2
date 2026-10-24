@@ -3,7 +3,7 @@
 use ckb_node::{NetworkType, NodeConfig, NodeType};
 use eframe::egui;
 
-use crate::types::{display_font, label_font, Status};
+use crate::types::{display_font, label_font, AppColors, Status};
 use crate::ui::utils::{
     breathing_dot, ckb_split, data_row, data_row_colored, draw_trend_chart, ghost_button,
     group_thousands, lerp_color, panel_frame, row_hover, section_header, truncate_middle_to,
@@ -20,7 +20,7 @@ impl App {
             ui.vertical(|ui| {
                 ui.set_width(ui.available_width() - 24.0);
 
-                // ── Screen header + network toggle ──────────
+                // ── Screen header ────────────────────────────
                 // While a foreign node holds the port, this page reports
                 // that node instead of one QPV2 manages
                 let foreign_node = self.foreign_node();
@@ -65,24 +65,34 @@ impl App {
                                 .color(self.colors.text_muted),
                         );
                     });
-                    if foreign_node.is_none() {
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            self.draw_network_toggle(ui);
-                        });
-                    }
                 });
 
                 ui.add_space(14.0);
-                let switch_to = self.draw_tab_bar(ui);
-                ui.add_space(12.0);
 
-                let backend = self.qp_client.config().node_type;
                 // Sections are numbered in render order because two of
                 // them are backend-conditional; fixed codes would leave
                 // gaps whenever one is skipped.
                 let mut sec = SectionCounter::new();
 
+                // ── Connection ───────────────────────────────
+                let mut switch_to = None;
+                panel_frame(&self.colors).show(ui, |ui| {
+                    ui.spacing_mut().item_spacing.y = 6.0;
+                    section_header(ui, &self.colors, &sec.next_code(), "Connection");
+                    ui.add_space(6.0);
+                    // A foreign node decides the network, so there is none
+                    // to choose; picking another backend is the way out.
+                    if foreign_node.is_none() {
+                        self.draw_network_row(ui);
+                    }
+                    switch_to = self.draw_backend_row(ui);
+                    self.draw_backend_status_row(ui);
+                });
+
+                let backend = self.qp_client.config().node_type;
+
                 // ── Chain ────────────────────────────────────
+                ui.add_space(12.0);
                 panel_frame(&self.colors).show(ui, |ui| {
                     ui.spacing_mut().item_spacing.y = 6.0;
                     section_header(ui, &self.colors, &sec.next_code(), "Chain");
@@ -228,83 +238,22 @@ impl App {
         }
     }
 
-    // ── Network toggle ───────────────────────────────────────
+    // ── Connection rows ──────────────────────────────────────
 
-    fn draw_network_toggle(&mut self, ui: &mut egui::Ui) {
+    /// NETWORK: Mainnet or Testnet, as a row of the Connection panel.
+    fn draw_network_row(&mut self, ui: &mut egui::Ui) {
         let current_network = self.qp_client.config().network;
+        let networks = [NetworkType::Mainnet, NetworkType::Testnet];
         let mut selected = current_network;
-
-        let seg_w = 86.0;
-        let seg_h = 26.0;
-        let gap = 6.0;
-        let (rect, _) =
-            ui.allocate_exact_size(egui::vec2(seg_w * 2.0 + gap, seg_h), egui::Sense::hover());
-
-        // Mainnet signals in accent cyan; testnet in caution yellow so the
-        // non-production network is always visually distinct.
-        let segments = [
-            (
-                NetworkType::Mainnet,
-                "MAINNET",
-                self.colors.accent,
-                self.colors.accent_tint,
-            ),
-            (
-                NetworkType::Testnet,
-                "TESTNET",
-                self.colors.warn,
-                self.colors.warn_tint,
-            ),
-        ];
-
-        for (i, &(net, label, signal, tint)) in segments.iter().enumerate() {
-            let cell = egui::Rect::from_min_size(
-                egui::pos2(rect.left() + i as f32 * (seg_w + gap), rect.top()),
-                egui::vec2(seg_w, seg_h),
-            );
-            let resp = ui.interact(cell, ui.id().with(("net-seg", i)), egui::Sense::click());
-            let painter = ui.painter();
-            let is_active = selected == net;
-
-            if is_active {
-                painter.rect_filled(cell, 0.0, tint);
+        setting_row(ui, &self.colors, "Network", |ui| {
+            let chosen = networks
+                .iter()
+                .position(|&n| n == current_network)
+                .unwrap_or(0);
+            if let Some(i) = text_choice(ui, &self.colors, &["MAINNET", "TESTNET"], chosen) {
+                selected = networks[i];
             }
-            let stroke_color = if is_active {
-                signal
-            } else if resp.hovered() {
-                self.colors.border2
-            } else {
-                self.colors.border
-            };
-            painter.rect_stroke(
-                cell,
-                0.0,
-                egui::Stroke::new(1.0, stroke_color),
-                egui::StrokeKind::Inside,
-            );
-
-            let text_color = if is_active {
-                signal
-            } else if resp.hovered() {
-                self.colors.text
-            } else {
-                self.colors.text_muted
-            };
-            painter.text(
-                cell.center(),
-                egui::Align2::CENTER_CENTER,
-                label,
-                label_font(9.5),
-                text_color,
-            );
-
-            if resp.clicked() {
-                selected = net;
-            }
-            if resp.hovered() {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-            }
-        }
+        });
 
         if selected != current_network {
             self.network = selected;
@@ -359,110 +308,45 @@ impl App {
         }
     }
 
-    // ── Backend tab bar ──────────────────────────────────────
-
-    fn draw_tab_bar(&mut self, ui: &mut egui::Ui) -> Option<NodeType> {
+    /// BACKEND: which node the wallet talks to, as a row of the Connection
+    /// panel. Returns the one picked this frame, applied by the caller after
+    /// the frame is drawn.
+    fn draw_backend_row(&self, ui: &mut egui::Ui) -> Option<NodeType> {
+        let current = self.qp_client.config().node_type;
         let backends = [
             NodeType::LightClient,
             NodeType::FullNode,
             NodeType::PublicRpc,
         ];
-        let current = self.qp_client.config().node_type;
         let mut switch_to = None;
-
-        let gap = 6.0;
-        let cell_h = 40.0;
-        let total_w = ui.available_width();
-        let seg_w = (total_w - gap * (backends.len() as f32 - 1.0)) / backends.len() as f32;
-        let (rect, _) = ui.allocate_exact_size(egui::vec2(total_w, cell_h), egui::Sense::hover());
-        let t = ui.input(|i| i.time) as f32;
-
-        for (i, &backend) in backends.iter().enumerate() {
-            let active = current == backend;
-            let cell = egui::Rect::from_min_size(
-                egui::pos2(rect.left() + i as f32 * (seg_w + gap), rect.top()),
-                egui::vec2(seg_w, cell_h),
-            );
-            let resp = ui.interact(cell, ui.id().with(("backend-tab", i)), egui::Sense::click());
-            let painter = ui.painter();
-
-            if active {
-                painter.rect_filled(cell, 0.0, self.colors.accent_tint);
+        setting_row(ui, &self.colors, "Backend", |ui| {
+            let chosen = backends.iter().position(|&b| b == current).unwrap_or(0);
+            let labels = backends.map(Self::backend_label);
+            if let Some(i) = text_choice(ui, &self.colors, &labels, chosen) {
+                switch_to = Some(backends[i]);
             }
-            let stroke_color = if active {
-                self.colors.accent
-            } else if resp.hovered() {
-                self.colors.border2
-            } else {
-                self.colors.border
-            };
-            painter.rect_stroke(
-                cell,
-                0.0,
-                egui::Stroke::new(1.0, stroke_color),
-                egui::StrokeKind::Inside,
-            );
-
-            let name_color = if active {
-                self.colors.accent
-            } else if resp.hovered() {
-                self.colors.text
-            } else {
-                self.colors.text_muted
-            };
-            painter.text(
-                egui::pos2(cell.center().x, cell.top() + 13.0),
-                egui::Align2::CENTER_CENTER,
-                Self::backend_label(backend),
-                label_font(10.0),
-                name_color,
-            );
-
-            // Status line: breathing dot + state code. The sync
-            // percentage lives in the header's quick node switcher.
-            let (code, status_color, urgent) = self.backend_status(backend, active);
-            let galley = painter.layout_no_wrap(code.to_string(), label_font(8.5), status_color);
-            let dot_w = if active { 11.0 } else { 0.0 };
-            let start_x = cell.center().x - (galley.rect.width() + dot_w) / 2.0;
-            let status_y = cell.bottom() - 12.0;
-            if active {
-                breathing_dot(
-                    painter,
-                    egui::pos2(start_x + 3.0, status_y),
-                    status_color,
-                    t,
-                    urgent,
-                );
-                ui.ctx()
-                    .request_repaint_after(std::time::Duration::from_millis(50));
-            }
-            painter.galley(
-                egui::pos2(start_x + dot_w, status_y - galley.rect.height() / 2.0),
-                galley,
-                status_color,
-            );
-
-            if resp.hovered() && !active {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-            }
-            if resp.clicked() && !active {
-                switch_to = Some(backend);
-            }
-        }
-
+        });
         switch_to
     }
 
-    /// State code + semantic color + urgency for a backend tab.
-    fn backend_status(
-        &self,
-        backend: NodeType,
-        active: bool,
-    ) -> (&'static str, egui::Color32, bool) {
-        let is_local_node = backend != NodeType::PublicRpc;
-        if !active {
-            ("STANDBY", self.colors.text_muted, false)
-        } else if is_local_node && !self.local_node.has_local_process() {
+    /// STATUS: the chosen backend's state, a breathing dot and its code.
+    fn draw_backend_status_row(&self, ui: &mut egui::Ui) {
+        let (code, color, urgent) = self.backend_status();
+        let t = ui.input(|i| i.time) as f32;
+        setting_row(ui, &self.colors, "Status", |ui| {
+            // Right to left: the code, then the dot before it.
+            ui.label(egui::RichText::new(code).size(12.5).color(color));
+            let (dot, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
+            breathing_dot(ui.painter(), dot.center(), color, t, urgent);
+        });
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_millis(50));
+    }
+
+    /// State code + semantic color + urgency for the chosen backend.
+    fn backend_status(&self) -> (&'static str, egui::Color32, bool) {
+        let is_local_node = self.qp_client.config().node_type != NodeType::PublicRpc;
+        if is_local_node && !self.local_node.has_local_process() {
             // Whatever else answers on the port is reported by `foreign_node`.
             ("OFFLINE", self.colors.danger, true)
         } else if self.node_status.online {
@@ -1092,6 +976,99 @@ impl App {
 }
 
 // ── Free functions ───────────────────────────────────────────
+
+/// Space either side of the "·" between a choice's options.
+const CHOICE_GAP: f32 = 8.0;
+
+/// A settings row laid out like `data_row`: the label on the left and
+/// `control` on the right, where the values of the rows below sit. The
+/// control is drawn right to left.
+fn setting_row(
+    ui: &mut egui::Ui,
+    colors: &AppColors,
+    label: &str,
+    control: impl FnOnce(&mut egui::Ui),
+) {
+    ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new(label.to_uppercase())
+                .font(label_font(9.5))
+                .color(colors.text_muted),
+        );
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), control);
+    });
+}
+
+/// A choice drawn as text, so it reads like the values below it: the
+/// options in a row with "·" between them, in the values' font. The chosen
+/// one is in the accent and underlined; the others are muted until hovered.
+/// Returns the option clicked this frame, if it isn't the chosen one.
+fn text_choice(
+    ui: &mut egui::Ui,
+    colors: &AppColors,
+    options: &[&str],
+    chosen: usize,
+) -> Option<usize> {
+    // `data_row`'s value font. Laid out without a colour, so each option can
+    // be painted in its own.
+    let font = egui::FontId::proportional(12.5);
+    let layout = |text: &str| {
+        ui.painter()
+            .layout_no_wrap(text.to_string(), font.clone(), egui::Color32::PLACEHOLDER)
+    };
+    let galleys: Vec<_> = options.iter().map(|option| layout(option)).collect();
+    let dot = layout("·");
+    let dot_w = dot.size().x + 2.0 * CHOICE_GAP;
+    let text_h = galleys.iter().map(|g| g.size().y).fold(0.0, f32::max);
+    let total = galleys.iter().map(|g| g.size().x).sum::<f32>()
+        + dot_w * options.len().saturating_sub(1) as f32;
+    // Room under the text for the underline.
+    let (area, _) = ui.allocate_exact_size(egui::vec2(total, text_h + 3.0), egui::Sense::hover());
+
+    let mut clicked = None;
+    let mut x = area.left();
+    for (i, (option, galley)) in options.iter().zip(galleys).enumerate() {
+        if i > 0 {
+            ui.painter().galley(
+                egui::pos2(x + CHOICE_GAP, area.top()),
+                dot.clone(),
+                colors.text_muted,
+            );
+            x += dot_w;
+        }
+        let rect = egui::Rect::from_min_size(egui::pos2(x, area.top()), galley.size());
+        x += galley.size().x;
+        let resp = ui.interact(
+            rect,
+            ui.id().with(("choice", *option)),
+            egui::Sense::click(),
+        );
+        let active = i == chosen;
+        let color = if active {
+            colors.accent
+        } else if resp.hovered() {
+            colors.text
+        } else {
+            colors.text_muted
+        };
+        ui.painter().galley(rect.min, galley, color);
+        if active {
+            ui.painter().hline(
+                rect.x_range(),
+                rect.bottom() + 1.5,
+                egui::Stroke::new(1.0, colors.accent),
+            );
+        } else {
+            if resp.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
+            if resp.clicked() {
+                clicked = Some(i);
+            }
+        }
+    }
+    clicked
+}
 
 fn full_node_sync_pct(sync_state: Option<&ckb_jsonrpc_types::SyncState>) -> f32 {
     let Some(s) = sync_state else {
