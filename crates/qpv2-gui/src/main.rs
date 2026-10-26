@@ -312,6 +312,25 @@ impl App {
         visuals.widgets.active.bg_stroke = egui::Stroke::new(1.0, colors.accent);
         visuals.widgets.open.bg_stroke = egui::Stroke::new(1.0, colors.border2);
 
+        // The rest of egui's colors that reach the screen. Its stock ones are
+        // grays tuned for its own theme, and the dropdowns showed them.
+        // A dropdown at rest is filled like a text field, lighter when
+        // hovered or open.
+        visuals.widgets.inactive.weak_bg_fill = colors.bg;
+        visuals.widgets.hovered.weak_bg_fill = colors.surface2;
+        visuals.widgets.active.weak_bg_fill = colors.surface2;
+        visuals.widgets.open.weak_bg_fill = colors.surface2;
+        // Disabled widgets and hint text fade toward this.
+        visuals.widgets.noninteractive.weak_bg_fill = colors.surface;
+        // Dropdown arrows, checkmarks and the collapsing triangle: muted at
+        // rest, full text color under the pointer.
+        visuals.widgets.noninteractive.fg_stroke.color = colors.text;
+        visuals.widgets.inactive.fg_stroke.color = colors.text_muted;
+        visuals.widgets.hovered.fg_stroke.color = colors.text;
+        visuals.widgets.active.fg_stroke.color = colors.text;
+        visuals.widgets.open.fg_stroke.color = colors.text;
+        visuals.text_cursor.stroke.color = colors.accent;
+
         // The Flight Deck theme is the app's only theme: never follow
         // the OS light/dark preference. Without this pin, egui swaps in
         // its stock white widget visuals (combo boxes, text fields,

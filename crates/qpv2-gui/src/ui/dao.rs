@@ -308,10 +308,19 @@ impl App {
                             };
                             format!("Account #{} ({}){}", idx, bal_str, ms)
                         };
+                        let selected_color = if self.accounts.is_empty() {
+                            self.colors.text_muted
+                        } else {
+                            self.colors.accent
+                        };
 
                         let prev_picked_from_account = self.dao_deposit_from_account;
                         let from_combo = egui::ComboBox::from_id_salt("dao_deposit_from")
-                            .selected_text(&from_text)
+                            .selected_text(
+                                egui::RichText::new(&from_text)
+                                    .size(12.0)
+                                    .color(selected_color),
+                            )
                             .width(ui.available_width())
                             .show_ui(ui, |ui| {
                                 for (i, account) in self.accounts.iter().enumerate() {
