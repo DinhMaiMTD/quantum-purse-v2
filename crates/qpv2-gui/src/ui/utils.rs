@@ -1026,6 +1026,35 @@ fn log_line(
     });
 }
 
+/// `text` part-way between noise and legible, for the dashboard's decode
+/// switch: `decode_progress` runs from 0 (all noise) to 1 (plain text), and
+/// each character reads once it passes its own point between 0.1 and 0.9.
+/// Until then it is a noise glyph that changes with `tick`. Spaces stay, and
+/// the fonts are monospace, so the text keeps its width throughout.
+pub(crate) fn decode_text(text: &str, decode_progress: f32, tick: u64) -> String {
+    use std::hash::{Hash, Hasher};
+    const NOISE: &[u8] = b"~!@#$%^&*_+,.<>?;':";
+    if decode_progress >= 1.0 {
+        return text.to_string();
+    }
+    // A fixed 0-to-1 value per character, the same every frame.
+    let unit = |i: usize, salt: u64| {
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        (text, i, salt).hash(&mut h);
+        (h.finish() % 10_000) as f32 / 10_000.0
+    };
+    text.chars()
+        .enumerate()
+        .map(|(i, ch)| {
+            if ch == ' ' || decode_progress > 0.1 + 0.8 * unit(i, 0) {
+                ch
+            } else {
+                NOISE[(unit(i, tick + 1) * NOISE.len() as f32) as usize % NOISE.len()] as char
+            }
+        })
+        .collect()
+}
+
 /// A compact trend chart: a single gradient area line coloured by its
 /// net trend — green when the series rises over its window, red when
 /// it falls, cyan when flat — so the chart itself answers "which way is
@@ -1035,6 +1064,7 @@ fn log_line(
 /// per-point markers; the trend and the one callout sentence carry the
 /// whole story. Shared by the dashboard's balance history and its
 /// QR-adoption (TVL) chart.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn draw_trend_chart(
     ui: &mut egui::Ui,
     colors: &AppColors,
@@ -1042,26 +1072,48 @@ pub(crate) fn draw_trend_chart(
     height: f32,
     placeholder: &str,
     hover: &str,
+    // The dashboard's switch animation: 0 is all noise with the chart blank,
+    // 1 is plain. In between, the plot is drawn that much of its width from
+    // the left, and its text settles out of noise tinted toward the signal
+    // color (see `decode_text`). 1.0 when nothing is switching.
+    decode_progress: f32,
+    // Paints the whole chart this one color in place of the trend's green,
+    // red or cyan, which None keeps. The arrow and sign still give the
+    // direction.
+    color_override: Option<egui::Color32>,
 ) {
     let (rect, resp) = ui.allocate_exact_size(
         egui::vec2(ui.available_width(), height),
         egui::Sense::hover(),
     );
     resp.on_hover_text(hover);
+    // New noise glyphs every 45 ms rather than every frame.
+    let tick = (ui.input(|i| i.time) / 0.045) as u64;
+    // Text in noise drifts toward the signal color, as if taken over.
+    let noise_tint = |c: egui::Color32| lerp_color(c, colors.signal, 1.0 - decode_progress);
 
     if series.len() < 2 {
         ui.painter().text(
             rect.center(),
             egui::Align2::CENTER_CENTER,
-            placeholder,
+            decode_text(placeholder, decode_progress, tick),
             label_font(8.5),
-            colors.text_muted,
+            noise_tint(colors.text_muted),
         );
         return;
     }
 
     let t = ui.input(|i| i.time) as f32;
     let painter = ui.painter();
+    // The plot is cut off at `decode_progress` of its width; the callout
+    // isn't.
+    let plot_painter = painter.with_clip_rect(egui::Rect::from_min_max(
+        rect.left_top() - egui::vec2(8.0, 8.0),
+        egui::pos2(
+            rect.left() - 8.0 + (rect.width() + 16.0) * decode_progress,
+            rect.bottom() + 8.0,
+        ),
+    ));
 
     // The callout claims a header band; the trace takes the rest. The
     // right inset reserves room for the endpoint dot's halo so it never
@@ -1101,6 +1153,7 @@ pub(crate) fn draw_trend_chart(
         std::cmp::Ordering::Less => (colors.danger, "\u{2212}", false),
         std::cmp::Ordering::Equal => (colors.accent, "", true),
     };
+    let dir = color_override.unwrap_or(dir);
     let delta = curr_v.abs_diff(first_v);
     let tint = |alpha: u8| egui::Color32::from_rgba_unmultiplied(dir.r(), dir.g(), dir.b(), alpha);
 
@@ -1118,25 +1171,25 @@ pub(crate) fn draw_trend_chart(
         mesh.add_triangle(i, i + 1, i + 2);
         mesh.add_triangle(i, i + 2, i + 3);
     }
-    painter.add(egui::Shape::mesh(mesh));
+    plot_painter.add(egui::Shape::mesh(mesh));
     // Baseline hairline grounds the fill.
-    painter.hline(
+    plot_painter.hline(
         plot.x_range(),
         plot.bottom(),
         egui::Stroke::new(1.0, colors.border),
     );
 
     // ── Trace: a soft bloom beneath a crisp stroke. ──
-    painter.add(egui::Shape::line(
+    plot_painter.add(egui::Shape::line(
         points.clone(),
         egui::Stroke::new(4.0, tint(22)),
     ));
-    painter.add(egui::Shape::line(points, egui::Stroke::new(1.0, dir)));
+    plot_painter.add(egui::Shape::line(points, egui::Stroke::new(1.0, dir)));
 
     // ── Endpoint: a clean dot with a gently breathing halo at "now". ──
     let breath = 0.6 + 0.4 * (t * 1.4).sin();
-    painter.circle_filled(last_point, 6.5, tint((70.0 * breath / 3.0) as u8));
-    painter.circle_filled(last_point, 3.0, dir);
+    plot_painter.circle_filled(last_point, 6.5, tint((70.0 * breath / 3.0) as u8));
+    plot_painter.circle_filled(last_point, 3.0, dir);
     ui.ctx().request_repaint_after(Duration::from_millis(50));
 
     // ── Callout: a painted ▲/▼ (font-independent), the signed CKB delta
@@ -1161,16 +1214,24 @@ pub(crate) fn draw_trend_chart(
                 egui::pos2(x + 8.0, ccy - 3.0),
             ]
         };
-        painter.add(egui::Shape::convex_polygon(tri, dir, egui::Stroke::NONE));
+        painter.add(egui::Shape::convex_polygon(
+            tri,
+            noise_tint(dir),
+            egui::Stroke::NONE,
+        ));
         x += 13.0;
     }
     let (d_int, d_frac) = ckb_split(delta);
     let r = painter.text(
         egui::pos2(x, ccy),
         egui::Align2::LEFT_CENTER,
-        format!("{}{}.{} CKB", sign, d_int, &d_frac[..1]),
+        decode_text(
+            &format!("{}{}.{} CKB", sign, d_int, &d_frac[..1]),
+            decode_progress,
+            tick,
+        ),
         label_font(10.5),
-        dir,
+        noise_tint(dir),
     );
     x = r.right() + 10.0;
     // Percent, when the baseline is non-zero and the figure stays sane.
@@ -1180,9 +1241,10 @@ pub(crate) fn draw_trend_chart(
             let r = painter.text(
                 egui::pos2(x, ccy),
                 egui::Align2::LEFT_CENTER,
-                format!("{}{:.1}%", sign, pct),
+                decode_text(&format!("{}{:.1}%", sign, pct), decode_progress, tick),
                 label_font(10.5),
-                dir.gamma_multiply(0.85),
+                // Tinted before fading: `lerp_color` takes opaque colors.
+                noise_tint(dir).gamma_multiply(0.85),
             );
             x = r.right() + 10.0;
         }
@@ -1198,9 +1260,9 @@ pub(crate) fn draw_trend_chart(
         painter.text(
             egui::pos2(x, ccy),
             egui::Align2::LEFT_CENTER,
-            since,
+            decode_text(&since, decode_progress, tick),
             label_font(8.5),
-            colors.text_muted,
+            noise_tint(colors.text_muted),
         );
     }
 }

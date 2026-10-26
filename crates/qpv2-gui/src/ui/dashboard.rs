@@ -1,19 +1,15 @@
 //! Dashboard tab: the flagship telemetry grid — balance readout,
 //! quick actions, and the transaction tape. Triple-clicking QR LOCK TVL
-//! turns the Total Balance panel over to the network's QR lock adoption
-//! for a few seconds.
+//! switches the Total Balance panel to the network's QR lock adoption for
+//! a few seconds.
 
-use std::f32::consts::{FRAC_PI_2, PI};
 use std::time::Duration;
 
 use eframe::egui;
-use egui::epaint::{ClippedShape, Primitive};
-use egui::layers::ShapeIdx;
-use egui::ClippedPrimitive;
 
 use super::utils::{
-    breathing_dot, ckb_split, draw_trend_chart, ghost_button, lerp_color, panel_frame, row_hover,
-    section_header, value_flash,
+    breathing_dot, ckb_split, decode_text, draw_trend_chart, ghost_button, lerp_color, panel_frame,
+    row_hover, section_header, value_flash,
 };
 use crate::types::{display_font, label_font, AppColors, Series, Status, Tab, TxKind, TxRecord};
 use crate::utils::format_relative_time;
@@ -29,115 +25,76 @@ const TAPE_ROW_H: f32 = 28.0;
 /// With the 3-point gap between rows, 30 rows is 930 points tall.
 const TAPE_MAX_ROWS: usize = 30;
 
-/// The balance strip's QR lock figure, whose triple-click turns the panel.
+/// The balance strip's QR lock figure, whose triple-click switches the panel.
 const QR_TVL: &str = "QR LOCK TVL";
-/// Seconds the Total Balance panel takes to turn over, each way.
-const FLIP_SECS: f64 = 0.6;
-/// Seconds the QR lock adoption side stays shown between the two turns.
-const FLIP_HOLD_SECS: f64 = 5.0;
+/// Seconds each switch takes: the side going away dissolves into noise for
+/// the first half, the side coming in settles out of it for the second.
+const SWITCH_SECS: f64 = 0.7;
+/// Seconds the QR lock adoption side stays shown between the two switches.
+const QR_SIDE_SECS: f64 = 5.0;
 
-/// How the Total Balance panel is turned this frame.
-struct PanelPose {
-    /// The QR lock adoption side faces the viewer, not the wallet's.
-    back: bool,
-    /// Its height as a share of full: 1 face-on, 0 edge-on.
-    squash: f32,
+/// Which side the Total Balance panel shows this frame, and how legible.
+struct PanelSwitchState {
+    /// The QR lock adoption side, not the wallet's.
+    shows_qr_adoption: bool,
+    /// How far the decode is: 0 is all noise with the chart blank, 1 is
+    /// plain (see `decode_text`).
+    decode_progress: f32,
 }
 
-/// Memory key for when the Total Balance panel was last turned over.
-fn panel_flip_id() -> egui::Id {
-    egui::Id::new("dash-panel-flip")
+/// Memory key for when the Total Balance panel was last switched.
+fn panel_switch_id() -> egui::Id {
+    egui::Id::new("dash-panel-switch")
 }
 
-/// The Total Balance panel's pose, from when QR LOCK TVL was
-/// triple-clicked: it turns over to the QR lock adoption side about its
-/// horizontal middle, holds it, then turns on round to the wallet's side.
-/// Schedules the repaints that keep a turn moving and end the hold on time.
-fn panel_flip_pose(ui: &egui::Ui) -> PanelPose {
-    let at_rest = PanelPose {
-        back: false,
-        squash: 1.0,
+/// The Total Balance panel's switch state, from when QR LOCK TVL was
+/// triple-clicked: the wallet's side dissolves and the QR lock adoption
+/// side settles in, holds, then the same back. The panel itself stays
+/// still. Schedules the repaints that keep a switch moving and end the hold
+/// on time.
+fn panel_switch_state(ui: &egui::Ui) -> PanelSwitchState {
+    let at_rest = PanelSwitchState {
+        shows_qr_adoption: false,
+        decode_progress: 1.0,
     };
-    let Some(started) = ui.data(|d| d.get_temp::<f64>(panel_flip_id())) else {
+    let Some(started) = ui.data(|d| d.get_temp::<f64>(panel_switch_id())) else {
         return at_rest;
     };
     let elapsed = ui.input(|i| i.time) - started;
-    let back_from = FLIP_SECS + FLIP_HOLD_SECS;
-    // Half a turn, eased in and out.
-    let half_turn = |t: f64| {
-        let u = (t / FLIP_SECS).clamp(0.0, 1.0) as f32;
-        PI * u * u * (3.0 - 2.0 * u)
-    };
-    let angle = if elapsed < FLIP_SECS {
-        ui.ctx().request_repaint();
-        half_turn(elapsed)
-    } else if elapsed < back_from {
-        ui.ctx()
-            .request_repaint_after(Duration::from_secs_f64(back_from - elapsed));
-        PI
-    } else if elapsed < back_from + FLIP_SECS {
-        ui.ctx().request_repaint();
-        PI + half_turn(elapsed - back_from)
-    } else {
-        ui.data_mut(|d| d.remove::<f64>(panel_flip_id()));
-        return at_rest;
-    };
-    PanelPose {
-        // Past a quarter turn the back faces the viewer, until three
-        // quarters bring the front round again.
-        back: (FRAC_PI_2..3.0 * FRAC_PI_2).contains(&angle),
-        squash: angle.cos().abs(),
-    }
-}
-
-/// How many shapes `layer` holds so far this frame: where the next one
-/// painted will go.
-fn painted_count(ctx: &egui::Context, layer: egui::LayerId) -> ShapeIdx {
-    ctx.graphics(|g| g.get(layer).map_or(ShapeIdx(0), |list| list.next_idx()))
-}
-
-/// Squashes what has been painted on `layer` since `first` toward the line
-/// at `axis_y`, to `squash` of its height, and dims it as it narrows: a card
-/// turning about a horizontal axis, seen edge-on at 0. egui's own transforms
-/// scale both ways at once, so the shapes are cut into triangles here and
-/// their corners moved, text included.
-fn squash_painted(
-    ctx: &egui::Context,
-    layer: egui::LayerId,
-    first: ShapeIdx,
-    axis_y: f32,
-    squash: f32,
-) {
-    let shapes: Vec<ClippedShape> = ctx.graphics(|g| {
-        g.get(layer).map_or_else(Vec::new, |list| {
-            list.all_entries().skip(first.0).cloned().collect()
-        })
-    });
-    if shapes.is_empty() {
-        return;
-    }
-    let primitives = ctx.tessellate(shapes, ctx.pixels_per_point());
-    let dim = 0.5 + 0.5 * squash;
-    ctx.graphics_mut(|g| {
-        let list = g.entry(layer);
-        for i in first.0..list.next_idx().0 {
-            list.reset_shape(ShapeIdx(i));
-        }
-        for ClippedPrimitive {
-            clip_rect,
-            primitive,
-        } in primitives
-        {
-            // Everything here is plain painting; there are no callbacks.
-            if let Primitive::Mesh(mut mesh) = primitive {
-                for vertex in &mut mesh.vertices {
-                    vertex.pos.y = axis_y + (vertex.pos.y - axis_y) * squash;
-                    vertex.color = vertex.color.gamma_multiply(dim);
-                }
-                list.add(clip_rect, egui::Shape::mesh(mesh));
+    let return_at = SWITCH_SECS + QR_SIDE_SECS;
+    let half = SWITCH_SECS / 2.0;
+    // `t` seconds into a switch away from the QR adoption side (or the
+    // wallet's).
+    let switching = |t: f64, from_qr_adoption: bool| {
+        if t < half {
+            PanelSwitchState {
+                shows_qr_adoption: from_qr_adoption,
+                decode_progress: 1.0 - (t / half) as f32,
+            }
+        } else {
+            PanelSwitchState {
+                shows_qr_adoption: !from_qr_adoption,
+                decode_progress: ((t - half) / half) as f32,
             }
         }
-    });
+    };
+    if elapsed < SWITCH_SECS {
+        ui.ctx().request_repaint();
+        switching(elapsed, false)
+    } else if elapsed < return_at {
+        ui.ctx()
+            .request_repaint_after(Duration::from_secs_f64(return_at - elapsed));
+        PanelSwitchState {
+            shows_qr_adoption: true,
+            decode_progress: 1.0,
+        }
+    } else if elapsed < return_at + SWITCH_SECS {
+        ui.ctx().request_repaint();
+        switching(elapsed - return_at, true)
+    } else {
+        ui.data_mut(|d| d.remove::<f64>(panel_switch_id()));
+        at_rest
+    }
 }
 
 /// Meta value below the total: integer part + 2 decimals keeps the
@@ -220,23 +177,30 @@ impl App {
             .filter_map(|b| b.as_ref().copied())
             .sum();
 
-        // Triple-clicking QR LOCK TVL turns this panel over, about its
-        // horizontal middle, to the network's QR lock adoption for a while:
-        // the same layout with the network's figures in place of the
-        // wallet's, so no wallet figure sits beside the network's chart.
-        let pose = panel_flip_pose(ui);
-        let layer = ui.layer_id();
-        let first = painted_count(ui.ctx(), layer);
+        // Triple-clicking QR LOCK TVL switches this panel to the network's
+        // QR lock adoption for a while: the same layout with the network's
+        // figures in place of the wallet's, so no wallet figure sits beside
+        // the network's chart. During a switch its text passes through noise
+        // and its chart erases and redraws (`panel_switch_state`).
+        let switch = panel_switch_state(ui);
+        // New noise glyphs every 45 ms rather than every frame.
+        let tick = (ui.input(|i| i.time) / 0.045) as u64;
+        let decode = |text: &str| decode_text(text, switch.decode_progress, tick);
+        // The network's chart is drawn in the signal color, so it can't pass
+        // for the wallet's. Text in noise drifts toward it too, as if the
+        // panel were taken over; the panel's frame stays as it is.
+        let signal = self.colors.signal;
+        let noise_tint = |c: egui::Color32| lerp_color(c, signal, 1.0 - switch.decode_progress);
         let qr_latest = self.qr_adoption_series.last().copied();
 
-        let panel = panel_frame(&self.colors).show(ui, |ui| {
+        panel_frame(&self.colors).show(ui, |ui| {
             ui.set_width(ui.available_width());
-            let title = if pose.back {
+            let title = if switch.shows_qr_adoption {
                 "QR Lock Adoption"
             } else {
                 "Total Balance"
             };
-            section_header(ui, &self.colors, "01", title);
+            section_header(ui, &self.colors, "01", &decode(title));
             ui.add_space(12.0);
 
             // Display numerals on the left; the chart claims all
@@ -244,13 +208,20 @@ impl App {
             // column is measured from the actual strings at the actual
             // fonts so the hero readout can never wrap, whatever the
             // figure's magnitude or window width.
-            let (hero, int_color) = if pose.back {
-                (qr_latest.map(|(_, total)| total), self.colors.text)
+            // The network's figure is in the signal color, its decimals
+            // halfway to gray: the same step down the wallet's figure takes.
+            let (hero, int_color, frac_color) = if switch.shows_qr_adoption {
+                (
+                    qr_latest.map(|(_, total)| total),
+                    signal,
+                    lerp_color(signal, self.colors.text_muted, 0.5),
+                )
             } else {
                 let flash = value_flash(ui, egui::Id::new("dash-total-flash"), total_shannons);
                 (
                     Some(total_shannons),
                     lerp_color(self.colors.text, self.colors.accent, flash),
+                    self.colors.text_muted,
                 )
             };
             // Before the network's figure first arrives, a dash.
@@ -273,7 +244,7 @@ impl App {
                 .layout_no_wrap(frac.clone(), display_font(20.0), int_color)
                 .size()
                 .x;
-            let left_w = int_w + frac_w + 10.0 + 30.0; // gap + "CKB" tag
+            let left_w = int_w + frac_w;
             let chart_w = (ui.available_width() - left_w - 14.0).max(140.0);
             ui.horizontal_top(|ui| {
                 // The 14px gap below is the only spacing between the two
@@ -288,27 +259,21 @@ impl App {
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 0.0;
                         ui.label(
-                            egui::RichText::new(int)
+                            egui::RichText::new(decode(&int))
                                 .font(display_font(34.0))
-                                .color(int_color),
+                                .color(noise_tint(int_color)),
                         );
                         ui.label(
-                            egui::RichText::new(frac)
+                            egui::RichText::new(decode(&frac))
                                 .font(display_font(20.0))
-                                .color(self.colors.text_muted),
-                        );
-                        ui.add_space(10.0);
-                        ui.label(
-                            egui::RichText::new("CKB")
-                                .font(label_font(10.0))
-                                .color(self.colors.accent),
+                                .color(noise_tint(frac_color)),
                         );
                     });
                 });
                 ui.add_space(14.0);
                 ui.vertical(|ui| {
                     ui.set_width(chart_w);
-                    if pose.back {
+                    if switch.shows_qr_adoption {
                         draw_trend_chart(
                             ui,
                             &self.colors,
@@ -317,6 +282,8 @@ impl App {
                             "QUERYING PUBLIC INDEXER",
                             "Network-wide CKB under the quantum-resistant lock, weekly, \
                              reconstructed from live cells via public RPC.",
+                            switch.decode_progress,
+                            Some(signal),
                         );
                     } else {
                         // Memoized: replaying + sorting the whole tape every
@@ -337,6 +304,8 @@ impl App {
                             96.0,
                             "NO SYNCED HISTORY YET",
                             "Your total balance over the last 3 months.",
+                            switch.decode_progress,
+                            None,
                         );
                     }
                 });
@@ -362,9 +331,10 @@ impl App {
             } else {
                 "~+"
             };
-            let metas = if pose.back {
-                // What the network's figure is and where it comes from.
-                let c = self.colors.text;
+            let metas = if switch.shows_qr_adoption {
+                // What the network's figure is and where it comes from, in
+                // the network's color like the figure itself.
+                let c = signal;
                 let updated = qr_latest
                     .map(|(ts, _)| format_relative_time(ts))
                     .unwrap_or_else(|| "--".to_string());
@@ -423,44 +393,37 @@ impl App {
                         egui::Layout::top_down(egui::Align::Min),
                         |ui| {
                             ui.label(
-                                egui::RichText::new(*label)
+                                egui::RichText::new(decode(label))
                                     .font(label_font(9.0))
-                                    .color(self.colors.text_muted),
+                                    .color(noise_tint(self.colors.text_muted)),
                             );
                             ui.add_space(3.0);
-                            ui.label(egui::RichText::new(value).size(13.0).color(*color));
+                            ui.label(
+                                egui::RichText::new(decode(value))
+                                    .size(13.0)
+                                    .color(noise_tint(*color)),
+                            );
                         },
                     );
-                    // No hint on hover: the flip is left to be found. The
-                    // cell is only on the front, so a triple-click can't
-                    // land while the panel is turned over.
+                    // No hint on hover: the switch is left to be found. A
+                    // triple-click while a switch is running is ignored.
                     if *label == QR_TVL
                         && ui
                             .interact(
                                 cell.response.rect,
-                                ui.id().with("qr-tvl-flip"),
+                                ui.id().with("qr-tvl-switch"),
                                 egui::Sense::click(),
                             )
                             .triple_clicked()
-                        && ui.data(|d| d.get_temp::<f64>(panel_flip_id())).is_none()
+                        && ui.data(|d| d.get_temp::<f64>(panel_switch_id())).is_none()
                     {
                         let now = ui.input(|i| i.time);
-                        ui.data_mut(|d| d.insert_temp(panel_flip_id(), now));
+                        ui.data_mut(|d| d.insert_temp(panel_switch_id(), now));
                         ui.ctx().request_repaint();
                     }
                 }
             });
         });
-
-        if pose.squash < 1.0 {
-            squash_painted(
-                ui.ctx(),
-                layer,
-                first,
-                panel.response.rect.center().y,
-                pose.squash,
-            );
-        }
     }
 
     /// Reconstructs the wallet's balance over the chart window by

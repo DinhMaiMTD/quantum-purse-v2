@@ -451,6 +451,10 @@ pub(crate) struct AppColors {
     pub(crate) text: egui::Color32,
     /// Secondary text — cool gray.
     pub(crate) text_muted: egui::Color32,
+    /// Purple for figures from outside the wallet: the network's QR lock
+    /// adoption on the dashboard. No other color means "not yours", so it
+    /// can't be read as the wallet's own chart.
+    pub(crate) signal: egui::Color32,
 }
 
 impl Default for AppColors {
@@ -470,6 +474,7 @@ impl Default for AppColors {
             warn: egui::Color32::from_rgb(255, 209, 102), // #ffd166
             text: egui::Color32::from_rgb(221, 232, 234), // #dde8ea
             text_muted: egui::Color32::from_rgb(109, 125, 130), // #6d7d82
+            signal: egui::Color32::from_rgb(192, 132, 252), // #c084fc
         }
     }
 }
