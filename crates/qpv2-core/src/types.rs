@@ -26,11 +26,44 @@ pub struct CipherPayload {
 }
 
 /// A signer in a multisig group: their SPHINCS+ variant and public key.
+///
+/// The fields are private so that a signer from outside this crate can only
+/// come from [`Signer::new`], which checks the key's length. Saved accounts
+/// and signing requests are loaded back as they were written.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Signer {
-    pub variant: SpxVariant,
+    variant: SpxVariant,
     #[serde(with = "hex::serde")]
-    pub pubkey: Vec<u8>,
+    pubkey: Vec<u8>,
+}
+
+impl Signer {
+    /// A signer from its parameter set and public key. A key of the wrong
+    /// length is refused: the account's address would be built from it, and
+    /// no signature could ever unlock what is sent there.
+    pub fn new(variant: SpxVariant, pubkey: Vec<u8>) -> Result<Self, String> {
+        let param_id: ckb_fips205_utils::ParamId = (variant as u8)
+            .try_into()
+            .expect("SpxVariant and ParamId share discriminants");
+        let (expected, _) = ckb_fips205_utils::verifying::lengths(param_id);
+        if pubkey.len() != expected {
+            return Err(format!(
+                "A {} public key is {} bytes, got {}.",
+                variant,
+                expected,
+                pubkey.len()
+            ));
+        }
+        Ok(Signer { variant, pubkey })
+    }
+
+    pub fn variant(&self) -> SpxVariant {
+        self.variant
+    }
+
+    pub fn pubkey(&self) -> &[u8] {
+        &self.pubkey
+    }
 }
 
 /// Single-sig accounts are a degenerate case of multisig: 1/1 msig.
@@ -86,14 +119,18 @@ impl fmt::Display for SingleSigConvention {
 
 /// Configuration for the CKB quantum-resistant lock script's all-in-one multisig header.
 /// Every account uses this — a "single-sig" account is threshold=1 with one signer.
+///
+/// The fields are private so that a config can only be built by [`Self::new`],
+/// a checked multisig of 2 or more signers, or [`Self::single_sig`], a 1-of-1.
+/// Saved accounts and signing requests are loaded back as they were written.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct MultisigConfig {
     /// How many of the first N signers must always provide a signature.
-    pub required_first_n: u8,
+    required_first_n: u8,
     /// Minimum number of valid signatures required to unlock (M in M-of-N).
-    pub threshold: u8,
+    threshold: u8,
     /// All signers in deterministic order, each with their own SPHINCS+ variant.
-    pub signers: Vec<Signer>,
+    signers: Vec<Signer>,
 }
 
 impl MultisigConfig {
@@ -161,6 +198,21 @@ impl MultisigConfig {
             threshold: 1,
             signers: vec![Signer { variant, pubkey }],
         }
+    }
+
+    /// How many of the first N signers must always provide a signature (R).
+    pub fn required_first_n(&self) -> u8 {
+        self.required_first_n
+    }
+
+    /// Minimum number of valid signatures required to unlock (M).
+    pub fn threshold(&self) -> u8 {
+        self.threshold
+    }
+
+    /// All signers in deterministic order (N is the count).
+    pub fn signers(&self) -> &[Signer] {
+        &self.signers
     }
 
     /// The 4-byte config header: [S, R, M, N].
@@ -414,5 +466,31 @@ impl Shl<u8> for SpxVariant {
     type Output = u8;
     fn shl(self, rhs: u8) -> u8 {
         (self as u8) << rhs
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// SPHINCS+-128 public keys are 32 bytes.
+    const SHA2_128S_PK_LEN: usize = 32;
+
+    #[test]
+    fn signer_needs_a_key_of_its_variants_length() {
+        assert!(Signer::new(SpxVariant::Sha2128S, vec![0; SHA2_128S_PK_LEN]).is_ok());
+        for len in [0, SHA2_128S_PK_LEN - 1, SHA2_128S_PK_LEN + 1] {
+            let err = Signer::new(SpxVariant::Sha2128S, vec![0; len]).unwrap_err();
+            assert!(err.contains(&format!("got {}", len)), "{err}");
+        }
+    }
+
+    #[test]
+    fn multisig_needs_at_least_two_signers() {
+        let one = Signer::new(SpxVariant::Sha2128S, vec![1; SHA2_128S_PK_LEN]).unwrap();
+        let err = MultisigConfig::new(0, 1, vec![one.clone()]).unwrap_err();
+        assert!(err.contains("at least one co-signer"), "{err}");
+        let two = Signer::new(SpxVariant::Sha2128S, vec![2; SHA2_128S_PK_LEN]).unwrap();
+        assert!(MultisigConfig::new(0, 1, vec![one, two]).is_ok());
     }
 }

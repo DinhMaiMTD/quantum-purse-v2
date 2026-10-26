@@ -73,9 +73,9 @@ fn sign_transaction(
         .map_err(|e| format!("Signing failed: {}", e))?;
     let signer_index = account
         .config
-        .signers
+        .signers()
         .iter()
-        .position(|s| s.pubkey == pubkey && s.variant == vault.variant)
+        .position(|s| s.pubkey() == pubkey && s.variant() == vault.variant)
         .ok_or_else(|| "Local signer pubkey not found in multisig config.".to_string())?;
 
     let from_addr = crate::utils::lock_args_to_address(&account.lock_args, is_mainnet)
@@ -99,7 +99,7 @@ fn sign_transaction(
     tracing::info!(
         "Multisig: local signer {} signed, awaiting {} more signature(s).",
         signer_index,
-        account.config.threshold as usize - 1
+        account.config.threshold() as usize - 1
     );
     Ok(SignedTx::Multisig {
         request: Box::new(request),
@@ -553,7 +553,7 @@ impl App {
             return;
         }
 
-        let variant = account.config.signers[0].variant;
+        let variant = account.config.signers()[0].variant();
         let account_index = account.index;
         let signing_lock_size = account.config.max_witness_lock_size();
         let is_mainnet = self.qp_client.is_mainnet();

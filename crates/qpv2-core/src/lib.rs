@@ -374,7 +374,7 @@ impl KeyVault {
                 "Single-sig account not found.".to_string()
             })?;
 
-        let local_signer = singlesig.config.signers[0].clone();
+        let local_signer = singlesig.config.signers()[0].clone();
         tracing::info!(
             "Creating multisig account (wallet_id={}, local_signer={}..., co_signers={})",
             wallet_id,
@@ -384,7 +384,7 @@ impl KeyVault {
 
         let mut signers = co_signers;
         signers.push(local_signer);
-        signers.sort_by(|a, b| a.pubkey.cmp(&b.pubkey));
+        signers.sort_by(|a, b| a.pubkey().cmp(b.pubkey()));
 
         let config = MultisigConfig::new(required_first_n, threshold, signers)?;
         let lock_script_args = config.lock_script_args();

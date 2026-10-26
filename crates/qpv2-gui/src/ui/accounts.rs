@@ -91,7 +91,7 @@ impl App {
                     .accounts
                     .iter()
                     .enumerate()
-                    .filter(|(_, a)| a.config.signers.len() == 1)
+                    .filter(|(_, a)| a.config.signers().len() == 1)
                     .map(|(i, a)| {
                         let address = match crate::utils::lock_args_to_address(
                             &a.lock_args,
@@ -104,8 +104,8 @@ impl App {
                             index: i,
                             address,
                             balance: self.spendable_balances.get(&a.lock_args).copied(),
-                            variant: format!("{}", a.config.signers[0].variant),
-                            pubkey_hex: hex::encode(&a.config.signers[0].pubkey),
+                            variant: format!("{}", a.config.signers()[0].variant()),
+                            pubkey_hex: hex::encode(a.config.signers()[0].pubkey()),
                         }
                     })
                     .collect();

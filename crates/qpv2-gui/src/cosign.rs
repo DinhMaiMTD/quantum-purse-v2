@@ -34,7 +34,7 @@ impl App {
                 ..
             } => (
                 request.signing_message.clone(),
-                request.multisig_config.signers.len(),
+                request.multisig_config.signers().len(),
                 signatures,
                 import_response_json,
             ),
@@ -110,9 +110,9 @@ impl App {
 
         let mut matched = None;
         for account in &singlesig_accounts {
-            let account_pubkey = &account.config.signers[0].pubkey;
-            for (i, signer) in request.multisig_config.signers.iter().enumerate() {
-                if signer.pubkey == *account_pubkey && signer.variant == variant {
+            let account_pubkey = account.config.signers()[0].pubkey();
+            for (i, signer) in request.multisig_config.signers().iter().enumerate() {
+                if signer.pubkey() == account_pubkey && signer.variant() == variant {
                     matched = Some((i, account.lock_args.clone()));
                     break;
                 }

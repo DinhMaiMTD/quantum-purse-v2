@@ -67,7 +67,7 @@ impl App {
                     .accounts
                     .iter()
                     .enumerate()
-                    .filter(|(_, a)| a.config.signers.len() > 1)
+                    .filter(|(_, a)| a.config.signers().len() > 1)
                     .map(|(i, a)| {
                         let address = match crate::utils::lock_args_to_address(
                             &a.lock_args,
@@ -86,20 +86,20 @@ impl App {
                                     .iter()
                                     .find(|x| x.lock_args == *la && x.config.is_single_sig())
                             })
-                            .map(|x| &x.config.signers[0].pubkey);
+                            .map(|x| x.config.signers()[0].pubkey());
                         let signers = a
                             .config
-                            .signers
+                            .signers()
                             .iter()
                             .enumerate()
                             .map(|(si, s)| {
-                                let pk_hex = hex::encode(&s.pubkey);
-                                let is_local = local_pubkey == Some(&s.pubkey);
+                                let pk_hex = hex::encode(s.pubkey());
+                                let is_local = local_pubkey == Some(s.pubkey());
                                 SignerLine {
                                     text: format!(
                                         "S{} {} {}",
                                         si,
-                                        s.variant,
+                                        s.variant(),
                                         truncate_middle(&pk_hex, 20, 20)
                                     ),
                                     is_local,
@@ -108,7 +108,11 @@ impl App {
                             .collect();
                         MultisigRow {
                             index: i,
-                            config: format!("{}/{}", a.config.threshold, a.config.signers.len()),
+                            config: format!(
+                                "{}/{}",
+                                a.config.threshold(),
+                                a.config.signers().len()
+                            ),
                             address,
                             balance: self.spendable_balances.get(&a.lock_args).copied(),
                             signers,

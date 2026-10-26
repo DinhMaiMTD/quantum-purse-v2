@@ -671,7 +671,7 @@ impl App {
         let singlesig: Vec<_> = self
             .accounts
             .iter()
-            .filter(|a| a.config.signers.len() == 1)
+            .filter(|a| a.config.signers().len() == 1)
             .collect();
 
         let local_lock_args = match singlesig.get(self.multisig_local_signer_idx) {
@@ -685,13 +685,13 @@ impl App {
         let co_signers: Vec<qpv2_core::types::Signer> = match self
             .multisig_co_signers
             .iter()
-            .map(|(hex, variant)| {
-                let pubkey =
-                    hex::decode(hex.trim()).map_err(|e| format!("Invalid pubkey hex: {}", e))?;
-                Ok(qpv2_core::types::Signer {
-                    variant: *variant,
-                    pubkey,
-                })
+            .enumerate()
+            .map(|(i, (hex, variant))| {
+                hex::decode(hex.trim())
+                    .map_err(|e| format!("Invalid pubkey hex: {}", e))
+                    .and_then(|pubkey| qpv2_core::types::Signer::new(*variant, pubkey))
+                    // Numbered as the dialog's cards are.
+                    .map_err(|e| format!("Signer {:02}: {}", i + 1, e))
             })
             .collect::<Result<Vec<_>, String>>()
         {

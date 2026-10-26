@@ -114,9 +114,9 @@ pub fn assemble_multisig_witness(
     config: &qpv2_core::types::MultisigConfig,
     signatures: &[(usize, Vec<u8>)],
 ) -> Result<Vec<u8>, NodeManagerError> {
-    let n = config.signers.len();
-    let m = config.threshold as usize;
-    let r = config.required_first_n as usize;
+    let n = config.signers().len();
+    let m = config.threshold() as usize;
+    let r = config.required_first_n() as usize;
 
     if signatures.len() != m {
         return Err(NodeManagerError::RpcError(format!(
@@ -155,8 +155,8 @@ pub fn assemble_multisig_witness(
     let mut lock = Vec::new();
     lock.extend_from_slice(&config.header_bytes());
 
-    for (i, signer) in config.signers.iter().enumerate() {
-        let param_id: ckb_fips205_utils::ParamId = (signer.variant as u8)
+    for (i, signer) in config.signers().iter().enumerate() {
+        let param_id: ckb_fips205_utils::ParamId = (signer.variant() as u8)
             .try_into()
             .expect("SpxVariant and ParamId share discriminants");
 
@@ -171,11 +171,11 @@ pub fn assemble_multisig_witness(
                 )));
             }
             lock.push(ckb_fips205_utils::construct_flag(param_id, true));
-            lock.extend_from_slice(&signer.pubkey);
+            lock.extend_from_slice(signer.pubkey());
             lock.extend_from_slice(sig);
         } else {
             lock.push(ckb_fips205_utils::construct_flag(param_id, false));
-            lock.extend_from_slice(&signer.pubkey);
+            lock.extend_from_slice(signer.pubkey());
         }
     }
 

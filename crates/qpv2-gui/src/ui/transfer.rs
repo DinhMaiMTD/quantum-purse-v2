@@ -117,7 +117,7 @@ impl App {
                         Some(b) => format_ckb_balance(b),
                         None => "--".to_string(),
                     };
-                    let ms = if self.accounts[idx].config.signers.len() > 1 {
+                    let ms = if self.accounts[idx].config.signers().len() > 1 {
                         " multisig"
                     } else {
                         ""
@@ -145,7 +145,7 @@ impl App {
                                 .get(&account.lock_args)
                                 .and_then(|b| b.as_ref())
                                 .copied();
-                            let ms = if account.config.signers.len() > 1 {
+                            let ms = if account.config.signers().len() > 1 {
                                 " multisig"
                             } else {
                                 ""

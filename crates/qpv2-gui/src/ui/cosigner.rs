@@ -143,7 +143,7 @@ impl App {
                 // so the local stays a plain `SigningRequest`.
                 request.as_ref().clone(),
                 signatures.len(),
-                request.multisig_config.threshold as usize,
+                request.multisig_config.threshold() as usize,
                 *step1_done,
             ),
             _ => return,
@@ -283,7 +283,10 @@ impl App {
                     request,
                     signatures,
                     ..
-                } => (signatures.len(), request.multisig_config.threshold as usize),
+                } => (
+                    signatures.len(),
+                    request.multisig_config.threshold() as usize,
+                ),
                 _ => return,
             };
 
@@ -448,8 +451,8 @@ impl App {
                                 "THRESHOLD",
                                 &format!(
                                     "{}-of-{}",
-                                    request.multisig_config.threshold,
-                                    request.multisig_config.signers.len()
+                                    request.multisig_config.threshold(),
+                                    request.multisig_config.signers().len()
                                 ),
                             );
                         });

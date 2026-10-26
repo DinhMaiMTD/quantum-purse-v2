@@ -115,7 +115,7 @@ impl App {
             .accounts
             .iter()
             .enumerate()
-            .filter(|(_, a)| a.config.signers.len() == 1)
+            .filter(|(_, a)| a.config.signers().len() == 1)
             .collect();
 
         let selected_text = if singlesig.is_empty() {

@@ -1002,7 +1002,7 @@ fn sign_with_trezor(
     )
     .map_err(|e| format!("Failed to fetch Trezor signing context: {}", e))?;
 
-    let variant = account.config.signers[0].variant;
+    let variant = account.config.signers()[0].variant();
     let sign_group: Vec<u32> = (0..unsigned_tx.inputs().len() as u32).collect();
 
     device_cue("Confirm the transaction on your Trezor...");
@@ -1172,8 +1172,8 @@ fn handle_msig_build_dao(
     println!("Message: {}", request.signing_message);
     println!(
         "Requires {} of {} signatures.",
-        account.config.threshold,
-        account.config.signers.len()
+        account.config.threshold(),
+        account.config.signers().len()
     );
     Ok(())
 }
@@ -1258,8 +1258,8 @@ fn handle_msig_build_transfer(ctx: &MsigBuildCtx, to: &str, amount: &str) -> Res
     println!("Message: {}", request.signing_message);
     println!(
         "Requires {} of {} signatures.",
-        account.config.threshold,
-        account.config.signers.len()
+        account.config.threshold(),
+        account.config.signers().len()
     );
     Ok(())
 }
@@ -1280,8 +1280,8 @@ fn handle_msig_sign(wallet_id: u32, request_path: &str, output: &str) -> Result<
     }
     println!(
         "Threshold: {}-of-{}",
-        request.multisig_config.threshold,
-        request.multisig_config.signers.len()
+        request.multisig_config.threshold(),
+        request.multisig_config.signers().len()
     );
 
     let singlesig_accounts = KeyVault::get_singlesig_accounts(wallet_id)?;
@@ -1291,9 +1291,9 @@ fn handle_msig_sign(wallet_id: u32, request_path: &str, output: &str) -> Result<
     let mut matched_lock_args = None;
 
     for account in &singlesig_accounts {
-        let account_pubkey = &account.config.signers[0].pubkey;
-        for (i, signer) in request.multisig_config.signers.iter().enumerate() {
-            if signer.pubkey == *account_pubkey && signer.variant == variant {
+        let account_pubkey = account.config.signers()[0].pubkey();
+        for (i, signer) in request.multisig_config.signers().iter().enumerate() {
+            if signer.pubkey() == account_pubkey && signer.variant() == variant {
                 matched_signer_index = Some(i);
                 matched_lock_args = Some(account.lock_args.clone());
                 break;
@@ -1369,7 +1369,7 @@ fn handle_msig_submit(
         signatures.push((response.signer_index, sig_bytes));
     }
 
-    let threshold = request.multisig_config.threshold as usize;
+    let threshold = request.multisig_config.threshold() as usize;
     if signatures.len() != threshold {
         return Err(format!(
             "Expected {} response file(s) (threshold), got {}.",
@@ -1605,7 +1605,7 @@ fn main() -> Result<(), String> {
                             let v = parse_variant(var_str)?;
                             let pubkey = hex::decode(hex)
                                 .map_err(|e| format!("Invalid pubkey hex '{}': {}", hex, e))?;
-                            Ok(qpv2_core::types::Signer { variant: v, pubkey })
+                            qpv2_core::types::Signer::new(v, pubkey)
                         })
                         .collect::<Result<Vec<_>, String>>()?;
 
@@ -1618,8 +1618,8 @@ fn main() -> Result<(), String> {
                     )?;
                     println!(
                         "✓ Multisig account created ({}-of-{})",
-                        account.config.threshold,
-                        account.config.signers.len()
+                        account.config.threshold(),
+                        account.config.signers().len()
                     );
                     println!(
                         "Identifier(CKB quantum lock script args): {}",
@@ -1639,12 +1639,12 @@ fn main() -> Result<(), String> {
                             println!("  Index  Account Identifier (CKB Quantum Lock Args)");
                             println!("  ─────────────────────────────────────────────────────────────────────");
                             for (idx, account) in single.iter().enumerate() {
-                                let signer = &account.config.signers[0];
+                                let signer = &account.config.signers()[0];
                                 println!("  [{}]    {}", idx, account.lock_args);
                                 println!(
                                     "         Pubkey:  {}:{}",
-                                    signer.variant,
-                                    hex::encode(&signer.pubkey)
+                                    signer.variant(),
+                                    hex::encode(signer.pubkey())
                                 );
                             }
                         }
@@ -1657,10 +1657,13 @@ fn main() -> Result<(), String> {
                             );
                             println!("  ─────────────────────────────────────────────────────────────────────");
                             for (idx, account) in multisig.iter().enumerate() {
-                                let n = account.config.signers.len();
+                                let n = account.config.signers().len();
                                 println!(
                                     "  [{}]    {}-of-{:<4}  {}",
-                                    idx, account.config.threshold, n, account.lock_args
+                                    idx,
+                                    account.config.threshold(),
+                                    n,
+                                    account.lock_args
                                 );
                             }
                         }
