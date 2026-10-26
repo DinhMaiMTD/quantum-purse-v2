@@ -569,7 +569,7 @@ impl App {
             needs_initial_fetch,
             multisig_modal_open: false,
             multisig_local_signer_idx: 0,
-            multisig_threshold: 2,
+            multisig_threshold: 1,
             multisig_required_first_n: 0,
             multisig_co_signers: vec![],
             cosign_request_json: String::new(),

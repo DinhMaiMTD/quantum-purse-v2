@@ -3,6 +3,7 @@
 use eframe::egui;
 
 use super::accounts::{header_cell, table_rule};
+use super::multisig_modal::NEW_CO_SIGNER_VARIANT;
 use super::utils::truncate_middle;
 use super::utils::{
     accent_button, badge, ckb_split, ghost_button, panel_frame, row_hover, section_header,
@@ -141,9 +142,11 @@ impl App {
                             accent_button(&self.colors, "NEW MULTISIG", egui::vec2(btn_w, 24.0));
                         if ui.add(btn).clicked() {
                             self.multisig_local_signer_idx = 0;
-                            self.multisig_threshold = 2;
+                            self.multisig_threshold = 1;
                             self.multisig_required_first_n = 0;
-                            self.multisig_co_signers = vec![];
+                            // A multisig needs at least one co-signer, so
+                            // the first card is there to fill in.
+                            self.multisig_co_signers = vec![(String::new(), NEW_CO_SIGNER_VARIANT)];
                             self.multisig_modal_open = true;
                         }
                     });

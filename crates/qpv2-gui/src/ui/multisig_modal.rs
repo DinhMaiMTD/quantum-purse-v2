@@ -10,6 +10,10 @@ use crate::ui::utils::{accent_button, ghost_button, pin_popup_above_modal, secti
 use crate::App;
 
 const MODAL_W: f32 = 480.0;
+/// The parameter set a new co-signer card starts on.
+pub(crate) const NEW_CO_SIGNER_VARIANT: SpxVariant = SpxVariant::Sha2128F;
+/// Tall enough for two co-signer cards; a third starts the scrolling.
+const MODAL_BODY_MAX_H: f32 = 5400.0;
 
 impl App {
     pub(crate) fn show_multisig_modal(&mut self, ctx: &egui::Context) {
@@ -38,6 +42,11 @@ impl App {
             (screen_rect.width() - MODAL_W) / 2.0,
             screen_rect.height() * 0.1,
         );
+        let margin = egui::Margin::symmetric(20, 18);
+        // Each co-signer adds a card, so past this height the dialog scrolls.
+        // The window caps it too, ending the dialog as far from the bottom as
+        // it starts from the top, since zooming in shrinks the window.
+        let max_body_h = MODAL_BODY_MAX_H.min(screen_rect.height() * 0.8 - margin.sum().y);
 
         egui::Area::new(egui::Id::new("multisig_modal_area"))
             .fixed_pos(modal_pos)
@@ -46,10 +55,20 @@ impl App {
                 egui::Frame::new()
                     .fill(self.colors.surface)
                     .stroke(egui::Stroke::new(1.0, self.colors.border2))
-                    .inner_margin(egui::Margin::symmetric(20, 18))
+                    .inner_margin(margin)
                     .show(ui, |ui| {
-                        ui.set_width(MODAL_W);
-                        self.multisig_modal_contents(ui);
+                        egui::ScrollArea::vertical()
+                            .max_height(max_body_h)
+                            // An area offers its contents only last frame's
+                            // height, so without this the dialog stays as
+                            // short as it opened, with no co-signers.
+                            .min_scrolled_height(max_body_h)
+                            // A card added from the bottom stays in view.
+                            .stick_to_bottom(true)
+                            .show(ui, |ui| {
+                                ui.set_width(MODAL_W);
+                                self.multisig_modal_contents(ui);
+                            });
                     });
             });
 
@@ -241,7 +260,7 @@ impl App {
             .clicked()
         {
             self.multisig_co_signers
-                .push((String::new(), SpxVariant::Sha2128S));
+                .push((String::new(), NEW_CO_SIGNER_VARIANT));
         }
 
         ui.add_space(14.0);
