@@ -1033,8 +1033,8 @@ fn log_line(
 /// change (signed CKB delta, percent, and the window's start date) and a
 /// clean endpoint dot marks the latest value. No axes, gridlines, or
 /// per-point markers; the trend and the one callout sentence carry the
-/// whole story. Shared by the dashboard's balance history and the
-/// Settings screen's QR-adoption (TVL) chart.
+/// whole story. Shared by the dashboard's balance history and its
+/// QR-adoption (TVL) chart.
 pub(crate) fn draw_trend_chart(
     ui: &mut egui::Ui,
     colors: &AppColors,

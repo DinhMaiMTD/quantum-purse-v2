@@ -1,7 +1,15 @@
 //! Dashboard tab: the flagship telemetry grid — balance readout,
-//! quick actions, and the transaction tape.
+//! quick actions, and the transaction tape. Triple-clicking QR LOCK TVL
+//! turns the Total Balance panel over to the network's QR lock adoption
+//! for a few seconds.
+
+use std::f32::consts::{FRAC_PI_2, PI};
+use std::time::Duration;
 
 use eframe::egui;
+use egui::epaint::{ClippedShape, Primitive};
+use egui::layers::ShapeIdx;
+use egui::ClippedPrimitive;
 
 use super::utils::{
     breathing_dot, ckb_split, draw_trend_chart, ghost_button, lerp_color, panel_frame, row_hover,
@@ -20,6 +28,117 @@ const TAPE_ROW_H: f32 = 28.0;
 /// The most tape rows shown at once, one per transaction; more scroll.
 /// With the 3-point gap between rows, 30 rows is 930 points tall.
 const TAPE_MAX_ROWS: usize = 30;
+
+/// The balance strip's QR lock figure, whose triple-click turns the panel.
+const QR_TVL: &str = "QR LOCK TVL";
+/// Seconds the Total Balance panel takes to turn over, each way.
+const FLIP_SECS: f64 = 0.6;
+/// Seconds the QR lock adoption side stays shown between the two turns.
+const FLIP_HOLD_SECS: f64 = 5.0;
+
+/// How the Total Balance panel is turned this frame.
+struct PanelPose {
+    /// The QR lock adoption side faces the viewer, not the wallet's.
+    back: bool,
+    /// Its height as a share of full: 1 face-on, 0 edge-on.
+    squash: f32,
+}
+
+/// Memory key for when the Total Balance panel was last turned over.
+fn panel_flip_id() -> egui::Id {
+    egui::Id::new("dash-panel-flip")
+}
+
+/// The Total Balance panel's pose, from when QR LOCK TVL was
+/// triple-clicked: it turns over to the QR lock adoption side about its
+/// horizontal middle, holds it, then turns on round to the wallet's side.
+/// Schedules the repaints that keep a turn moving and end the hold on time.
+fn panel_flip_pose(ui: &egui::Ui) -> PanelPose {
+    let at_rest = PanelPose {
+        back: false,
+        squash: 1.0,
+    };
+    let Some(started) = ui.data(|d| d.get_temp::<f64>(panel_flip_id())) else {
+        return at_rest;
+    };
+    let elapsed = ui.input(|i| i.time) - started;
+    let back_from = FLIP_SECS + FLIP_HOLD_SECS;
+    // Half a turn, eased in and out.
+    let half_turn = |t: f64| {
+        let u = (t / FLIP_SECS).clamp(0.0, 1.0) as f32;
+        PI * u * u * (3.0 - 2.0 * u)
+    };
+    let angle = if elapsed < FLIP_SECS {
+        ui.ctx().request_repaint();
+        half_turn(elapsed)
+    } else if elapsed < back_from {
+        ui.ctx()
+            .request_repaint_after(Duration::from_secs_f64(back_from - elapsed));
+        PI
+    } else if elapsed < back_from + FLIP_SECS {
+        ui.ctx().request_repaint();
+        PI + half_turn(elapsed - back_from)
+    } else {
+        ui.data_mut(|d| d.remove::<f64>(panel_flip_id()));
+        return at_rest;
+    };
+    PanelPose {
+        // Past a quarter turn the back faces the viewer, until three
+        // quarters bring the front round again.
+        back: (FRAC_PI_2..3.0 * FRAC_PI_2).contains(&angle),
+        squash: angle.cos().abs(),
+    }
+}
+
+/// How many shapes `layer` holds so far this frame: where the next one
+/// painted will go.
+fn painted_count(ctx: &egui::Context, layer: egui::LayerId) -> ShapeIdx {
+    ctx.graphics(|g| g.get(layer).map_or(ShapeIdx(0), |list| list.next_idx()))
+}
+
+/// Squashes what has been painted on `layer` since `first` toward the line
+/// at `axis_y`, to `squash` of its height, and dims it as it narrows: a card
+/// turning about a horizontal axis, seen edge-on at 0. egui's own transforms
+/// scale both ways at once, so the shapes are cut into triangles here and
+/// their corners moved, text included.
+fn squash_painted(
+    ctx: &egui::Context,
+    layer: egui::LayerId,
+    first: ShapeIdx,
+    axis_y: f32,
+    squash: f32,
+) {
+    let shapes: Vec<ClippedShape> = ctx.graphics(|g| {
+        g.get(layer).map_or_else(Vec::new, |list| {
+            list.all_entries().skip(first.0).cloned().collect()
+        })
+    });
+    if shapes.is_empty() {
+        return;
+    }
+    let primitives = ctx.tessellate(shapes, ctx.pixels_per_point());
+    let dim = 0.5 + 0.5 * squash;
+    ctx.graphics_mut(|g| {
+        let list = g.entry(layer);
+        for i in first.0..list.next_idx().0 {
+            list.reset_shape(ShapeIdx(i));
+        }
+        for ClippedPrimitive {
+            clip_rect,
+            primitive,
+        } in primitives
+        {
+            // Everything here is plain painting; there are no callbacks.
+            if let Primitive::Mesh(mut mesh) = primitive {
+                for vertex in &mut mesh.vertices {
+                    vertex.pos.y = axis_y + (vertex.pos.y - axis_y) * squash;
+                    vertex.color = vertex.color.gamma_multiply(dim);
+                }
+                list.add(clip_rect, egui::Shape::mesh(mesh));
+            }
+        }
+    });
+}
 
 /// Meta value below the total: integer part + 2 decimals keeps the
 /// strip readable; the hero number above carries full precision.
@@ -101,27 +220,57 @@ impl App {
             .filter_map(|b| b.as_ref().copied())
             .sum();
 
-        panel_frame(&self.colors).show(ui, |ui| {
+        // Triple-clicking QR LOCK TVL turns this panel over, about its
+        // horizontal middle, to the network's QR lock adoption for a while:
+        // the same layout with the network's figures in place of the
+        // wallet's, so no wallet figure sits beside the network's chart.
+        let pose = panel_flip_pose(ui);
+        let layer = ui.layer_id();
+        let first = painted_count(ui.ctx(), layer);
+        let qr_latest = self.qr_adoption_series.last().copied();
+
+        let panel = panel_frame(&self.colors).show(ui, |ui| {
             ui.set_width(ui.available_width());
-            section_header(ui, &self.colors, "01", "Total Balance");
+            let title = if pose.back {
+                "QR Lock Adoption"
+            } else {
+                "Total Balance"
+            };
+            section_header(ui, &self.colors, "01", title);
             ui.add_space(12.0);
 
-            // Display numerals on the left; the balance-history chart
-            // claims all remaining width up to the panel's right edge.
-            // The numerals column is measured from the actual strings
-            // at the actual fonts so the hero readout can never wrap,
-            // whatever the balance magnitude or window width.
-            let flash = value_flash(ui, egui::Id::new("dash-total-flash"), total_shannons);
-            let int_color = lerp_color(self.colors.text, self.colors.accent, flash);
-            let (int, frac) = ckb_split(total_shannons);
+            // Display numerals on the left; the chart claims all
+            // remaining width up to the panel's right edge. The numerals
+            // column is measured from the actual strings at the actual
+            // fonts so the hero readout can never wrap, whatever the
+            // figure's magnitude or window width.
+            let (hero, int_color) = if pose.back {
+                (qr_latest.map(|(_, total)| total), self.colors.text)
+            } else {
+                let flash = value_flash(ui, egui::Id::new("dash-total-flash"), total_shannons);
+                (
+                    Some(total_shannons),
+                    lerp_color(self.colors.text, self.colors.accent, flash),
+                )
+            };
+            // Before the network's figure first arrives, a dash.
+            let (int, frac) = match hero {
+                Some(shannons) => ckb_split(shannons),
+                None => ("--".to_string(), String::new()),
+            };
             let int_w = ui
                 .painter()
                 .layout_no_wrap(int.clone(), display_font(34.0), int_color)
                 .size()
                 .x;
+            let frac = if frac.is_empty() {
+                frac
+            } else {
+                format!(".{}", frac)
+            };
             let frac_w = ui
                 .painter()
-                .layout_no_wrap(format!(".{}", frac), display_font(20.0), int_color)
+                .layout_no_wrap(frac.clone(), display_font(20.0), int_color)
                 .size()
                 .x;
             let left_w = int_w + frac_w + 10.0 + 30.0; // gap + "CKB" tag
@@ -144,7 +293,7 @@ impl App {
                                 .color(int_color),
                         );
                         ui.label(
-                            egui::RichText::new(format!(".{}", frac))
+                            egui::RichText::new(frac)
                                 .font(display_font(20.0))
                                 .color(self.colors.text_muted),
                         );
@@ -159,25 +308,37 @@ impl App {
                 ui.add_space(14.0);
                 ui.vertical(|ui| {
                     ui.set_width(chart_w);
-                    // Memoized: replaying + sorting the whole tape every
-                    // frame is wasted work. Key on the inputs, with time
-                    // bucketed to 10s so the cache stays hot between
-                    // repaints.
-                    let now = crate::utils::unix_now_secs();
-                    let key = (self.tx_history.len(), total_shannons, now / 10);
-                    if self.balance_chart_cache.as_ref().map(|(k, _)| *k) != Some(key) {
-                        let history = self.balance_history(total_shannons, now);
-                        self.balance_chart_cache = Some((key, history));
+                    if pose.back {
+                        draw_trend_chart(
+                            ui,
+                            &self.colors,
+                            &self.qr_adoption_series,
+                            96.0,
+                            "QUERYING PUBLIC INDEXER",
+                            "Network-wide CKB under the quantum-resistant lock, weekly, \
+                             reconstructed from live cells via public RPC.",
+                        );
+                    } else {
+                        // Memoized: replaying + sorting the whole tape every
+                        // frame is wasted work. Key on the inputs, with time
+                        // bucketed to 10s so the cache stays hot between
+                        // repaints.
+                        let now = crate::utils::unix_now_secs();
+                        let key = (self.tx_history.len(), total_shannons, now / 10);
+                        if self.balance_chart_cache.as_ref().map(|(k, _)| *k) != Some(key) {
+                            let history = self.balance_history(total_shannons, now);
+                            self.balance_chart_cache = Some((key, history));
+                        }
+                        let (_, history) = self.balance_chart_cache.as_ref().expect("set above");
+                        draw_trend_chart(
+                            ui,
+                            &self.colors,
+                            history,
+                            96.0,
+                            "NO SYNCED HISTORY YET",
+                            "Your total balance over the last 3 months.",
+                        );
                     }
-                    let (_, history) = self.balance_chart_cache.as_ref().expect("set above");
-                    draw_trend_chart(
-                        ui,
-                        &self.colors,
-                        history,
-                        96.0,
-                        "NO SYNCED HISTORY YET",
-                        "Your total balance over the last 3 months.",
-                    );
                 });
             });
 
@@ -201,29 +362,45 @@ impl App {
             } else {
                 "~+"
             };
-            let metas = [
-                ("AVAILABLE", meta_ckb(available), self.colors.accent),
-                (
-                    "ACCOUNTS",
-                    format!("{}", self.accounts.len()),
-                    self.colors.text,
-                ),
-                ("DAO LOCKED", meta_ckb(dao_locked), self.colors.warn),
-                (
-                    "DAO EARNED",
-                    format!("{}{}", earned_prefix, meta_ckb(dao_earned)),
-                    self.colors.accent2,
-                ),
-                ("APC", self.compute_dao_apc(), self.colors.accent2),
-                (
-                    "QR LOCK TVL",
-                    self.qr_adoption_series
-                        .last()
-                        .map(|&(_, v)| meta_ckb(v))
-                        .unwrap_or_else(|| "--".to_string()),
-                    self.colors.accent,
-                ),
-            ];
+            let metas = if pose.back {
+                // What the network's figure is and where it comes from.
+                let c = self.colors.text;
+                let updated = qr_latest
+                    .map(|(ts, _)| format_relative_time(ts))
+                    .unwrap_or_else(|| "--".to_string());
+                vec![
+                    ("SCOPE", "Network-wide".to_string(), c),
+                    ("LOCK", "Quantum-resistant".to_string(), c),
+                    ("SOURCE", "Public RPC".to_string(), c),
+                    // 13 weekly points (`fetch_qr_adoption`), the span of
+                    // the balance chart on the front.
+                    ("PERIOD", "Last 3 months".to_string(), c),
+                    ("UPDATED", updated, c),
+                ]
+            } else {
+                vec![
+                    ("AVAILABLE", meta_ckb(available), self.colors.accent),
+                    (
+                        "ACCOUNTS",
+                        format!("{}", self.accounts.len()),
+                        self.colors.text,
+                    ),
+                    ("DAO LOCKED", meta_ckb(dao_locked), self.colors.warn),
+                    (
+                        "DAO EARNED",
+                        format!("{}{}", earned_prefix, meta_ckb(dao_earned)),
+                        self.colors.accent2,
+                    ),
+                    ("APC", self.compute_dao_apc(), self.colors.accent2),
+                    (
+                        QR_TVL,
+                        qr_latest
+                            .map(|(_, v)| meta_ckb(v))
+                            .unwrap_or_else(|| "--".to_string()),
+                        self.colors.accent,
+                    ),
+                ]
+            };
             let gap = 25.0;
             let n = metas.len() as f32;
             let col_w = (ui.available_width() - (n - 1.0) * gap) / n;
@@ -241,7 +418,7 @@ impl App {
                         );
                         ui.add_space(12.0);
                     }
-                    ui.allocate_ui_with_layout(
+                    let cell = ui.allocate_ui_with_layout(
                         egui::vec2(col_w, 30.0),
                         egui::Layout::top_down(egui::Align::Min),
                         |ui| {
@@ -254,9 +431,36 @@ impl App {
                             ui.label(egui::RichText::new(value).size(13.0).color(*color));
                         },
                     );
+                    // No hint on hover: the flip is left to be found. The
+                    // cell is only on the front, so a triple-click can't
+                    // land while the panel is turned over.
+                    if *label == QR_TVL
+                        && ui
+                            .interact(
+                                cell.response.rect,
+                                ui.id().with("qr-tvl-flip"),
+                                egui::Sense::click(),
+                            )
+                            .triple_clicked()
+                        && ui.data(|d| d.get_temp::<f64>(panel_flip_id())).is_none()
+                    {
+                        let now = ui.input(|i| i.time);
+                        ui.data_mut(|d| d.insert_temp(panel_flip_id(), now));
+                        ui.ctx().request_repaint();
+                    }
                 }
             });
         });
+
+        if pose.squash < 1.0 {
+            squash_painted(
+                ui.ctx(),
+                layer,
+                first,
+                panel.response.rect.center().y,
+                pose.squash,
+            );
+        }
     }
 
     /// Reconstructs the wallet's balance over the chart window by
@@ -351,8 +555,8 @@ impl App {
             ("SEND", Tab::Transfer),
             ("RECEIVE", Tab::Accounts),
             ("DAO", Tab::DaoOperations),
-            ("SETTINGS", Tab::Settings),
             ("WALLETS", Tab::Wallets),
+            ("SETTINGS", Tab::Settings),
         ];
         let gap = 8.0;
         let btn_w = (ui.available_width() - 4.0 * gap) / 5.0;

@@ -5,9 +5,8 @@ use eframe::egui;
 
 use crate::types::{display_font, label_font, AppColors, Status};
 use crate::ui::utils::{
-    breathing_dot, ckb_split, data_row, data_row_colored, draw_trend_chart, ghost_button,
-    group_thousands, lerp_color, panel_frame, row_hover, section_header, truncate_middle_to,
-    truncate_tail, value_flash, SectionCounter,
+    data_row, data_row_colored, ghost_button, group_thousands, lerp_color, panel_frame, row_hover,
+    section_header, truncate_middle_to, truncate_tail, value_flash, SectionCounter,
 };
 use crate::App;
 
@@ -86,7 +85,6 @@ impl App {
                         self.draw_network_row(ui);
                     }
                     switch_to = self.draw_backend_row(ui);
-                    self.draw_backend_status_row(ui);
                 });
 
                 let backend = self.qp_client.config().node_type;
@@ -144,13 +142,6 @@ impl App {
                     });
                 }
 
-                // ── QR Lock Adoption ─────────────────────────
-                ui.add_space(12.0);
-                panel_frame(&self.colors).show(ui, |ui| {
-                    ui.set_width(ui.available_width());
-                    self.draw_qr_adoption_section(ui, &sec.next_code());
-                });
-
                 // Applied after rendering so the frame draws against the
                 // pre-switch state instead of half-updated config.
                 if let Some(backend) = switch_to {
@@ -160,74 +151,6 @@ impl App {
                 ui.add_space(20.0);
             });
         });
-    }
-
-    /// Network-wide adoption of the quantum-resistant lock script:
-    /// headline CKB total plus the weekly chart. Chain telemetry, so it
-    /// lives here with the rest of the node instrumentation — data via
-    /// a public RPC indexer (the light client only sees its registered
-    /// scripts), reconstructed from live cells' creation blocks.
-    fn draw_qr_adoption_section(&mut self, ui: &mut egui::Ui, code: &str) {
-        section_header(ui, &self.colors, code, "QR Lock Adoption");
-        ui.add_space(8.0);
-
-        match self.qr_adoption_series.last().copied() {
-            Some((ts, total)) => {
-                let (int, frac) = ckb_split(total);
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 0.0;
-                    ui.label(
-                        egui::RichText::new(int)
-                            .font(display_font(20.0))
-                            .color(self.colors.text),
-                    );
-                    ui.label(
-                        egui::RichText::new(format!(".{}", &frac[..2]))
-                            .font(display_font(13.0))
-                            .color(self.colors.text_muted),
-                    );
-                    ui.add_space(6.0);
-                    ui.label(
-                        egui::RichText::new("CKB")
-                            .font(label_font(9.0))
-                            .color(self.colors.accent),
-                    );
-                });
-                ui.label(
-                    egui::RichText::new("SECURED BY THE QUANTUM-RESISTANT LOCK · NETWORK-WIDE")
-                        .font(label_font(8.0))
-                        .color(self.colors.text_muted),
-                );
-                ui.add_space(8.0);
-
-                draw_trend_chart(
-                    ui,
-                    &self.colors,
-                    &self.qr_adoption_series,
-                    110.0,
-                    "QUERYING PUBLIC INDEXER",
-                    "Network-wide CKB under the quantum-resistant lock, weekly, \
-                     reconstructed from live cells via public RPC.",
-                );
-
-                ui.add_space(6.0);
-                ui.label(
-                    egui::RichText::new(format!(
-                        "VIA PUBLIC RPC · WEEKLY · UPDATED {}",
-                        crate::utils::format_relative_time(ts).to_uppercase()
-                    ))
-                    .font(label_font(7.5))
-                    .color(self.colors.text_muted),
-                );
-            }
-            None => {
-                ui.label(
-                    egui::RichText::new("Querying public indexer...")
-                        .size(11.0)
-                        .color(self.colors.text_muted),
-                );
-            }
-        }
     }
 
     fn backend_label(backend: NodeType) -> &'static str {
@@ -327,35 +250,6 @@ impl App {
             }
         });
         switch_to
-    }
-
-    /// STATUS: the chosen backend's state, a breathing dot and its code.
-    fn draw_backend_status_row(&self, ui: &mut egui::Ui) {
-        let (code, color, urgent) = self.backend_status();
-        let t = ui.input(|i| i.time) as f32;
-        setting_row(ui, &self.colors, "Status", |ui| {
-            // Right to left: the code, then the dot before it.
-            ui.label(egui::RichText::new(code).size(12.5).color(color));
-            let (dot, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
-            breathing_dot(ui.painter(), dot.center(), color, t, urgent);
-        });
-        ui.ctx()
-            .request_repaint_after(std::time::Duration::from_millis(50));
-    }
-
-    /// State code + semantic color + urgency for the chosen backend.
-    fn backend_status(&self) -> (&'static str, egui::Color32, bool) {
-        let is_local_node = self.qp_client.config().node_type != NodeType::PublicRpc;
-        if is_local_node && !self.local_node.has_local_process() {
-            // Whatever else answers on the port is reported by `foreign_node`.
-            ("OFFLINE", self.colors.danger, true)
-        } else if self.node_status.online {
-            ("ONLINE", self.colors.accent2, false)
-        } else if is_local_node {
-            ("STARTING", self.colors.warn, true)
-        } else {
-            ("OFFLINE", self.colors.danger, true)
-        }
     }
 
     /// Detects a node QPV2 did not start answering on its port: a local
