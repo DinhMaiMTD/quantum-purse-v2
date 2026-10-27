@@ -105,24 +105,8 @@ impl App {
     fn find_local_signer(&self, request: &SigningRequest) -> Result<CosignSigner, String> {
         let variant = KeyVault::get_spx_variant(self.wallet_id)
             .map_err(|e| format!("Failed to read variant: {}", e))?;
-        let singlesig_accounts = KeyVault::get_singlesig_accounts(self.wallet_id)
-            .map_err(|e| format!("Failed to load accounts: {}", e))?;
-
-        let mut matched = None;
-        for account in &singlesig_accounts {
-            let account_pubkey = account.config.signers()[0].pubkey();
-            for (i, signer) in request.multisig_config.signers().iter().enumerate() {
-                if signer.pubkey() == account_pubkey && signer.variant() == variant {
-                    matched = Some((i, account.lock_args.clone()));
-                    break;
-                }
-            }
-            if matched.is_some() {
-                break;
-            }
-        }
-        let (signer_index, lock_args) = matched
-            .ok_or_else(|| "No local account matches a signer in this request.".to_string())?;
+        let (signer_index, lock_args) =
+            KeyVault::find_local_signer(self.wallet_id, &request.multisig_config)?;
 
         let message = hex::decode(&request.signing_message)
             .map_err(|e| format!("Invalid signing message hex: {}", e))?;

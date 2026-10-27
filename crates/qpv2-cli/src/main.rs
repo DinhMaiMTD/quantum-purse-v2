@@ -1284,30 +1284,9 @@ fn handle_msig_sign(wallet_id: u32, request_path: &str, output: &str) -> Result<
         request.multisig_config.signers().len()
     );
 
-    let singlesig_accounts = KeyVault::get_singlesig_accounts(wallet_id)?;
     let variant = KeyVault::get_spx_variant(wallet_id)?;
-
-    let mut matched_signer_index = None;
-    let mut matched_lock_args = None;
-
-    for account in &singlesig_accounts {
-        let account_pubkey = account.config.signers()[0].pubkey();
-        for (i, signer) in request.multisig_config.signers().iter().enumerate() {
-            if signer.pubkey() == account_pubkey && signer.variant() == variant {
-                matched_signer_index = Some(i);
-                matched_lock_args = Some(account.lock_args.clone());
-                break;
-            }
-        }
-        if matched_signer_index.is_some() {
-            break;
-        }
-    }
-
-    let signer_index = matched_signer_index.ok_or_else(|| {
-        "No local singlesig account matches any signer in this multisig config.".to_string()
-    })?;
-    let singlesig_lock_args = matched_lock_args.unwrap();
+    let (signer_index, singlesig_lock_args) =
+        KeyVault::find_local_signer(wallet_id, &request.multisig_config)?;
 
     println!("Matched local account as signer index {}.", signer_index);
 

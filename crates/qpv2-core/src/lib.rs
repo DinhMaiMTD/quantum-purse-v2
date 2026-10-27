@@ -166,6 +166,29 @@ impl KeyVault {
         db::get_multisig_accounts(wallet_id).map_err(|e| e.to_string())
     }
 
+    /// Finds which of this wallet's single-sig accounts is a signer of a
+    /// multisig. Returns that signer's position in `config`'s signer list and
+    /// the account's lock args. If the wallet holds several of the keys, the
+    /// first of its accounts that matches is used. The GUI and the CLI both
+    /// use it to co-sign a request.
+    pub fn find_local_signer(
+        wallet_id: u32,
+        config: &MultisigConfig,
+    ) -> Result<(usize, String), String> {
+        let variant = Self::get_spx_variant(wallet_id)?;
+        for account in Self::get_singlesig_accounts(wallet_id)? {
+            let account_pubkey = account.config.signers()[0].pubkey();
+            if let Some(index) = config
+                .signers()
+                .iter()
+                .position(|s| s.pubkey() == account_pubkey && s.variant() == variant)
+            {
+                return Ok((index, account.lock_args));
+            }
+        }
+        Err("No account in this wallet is a signer of this multisig.".to_string())
+    }
+
     /// Retrieves all accounts (single-sig + multisig) combined.
     pub fn get_all_accounts(wallet_id: u32) -> Result<Vec<SphincsPlusAccount>, String> {
         let mut all = db::get_singlesig_accounts(wallet_id).map_err(|e| e.to_string())?;
